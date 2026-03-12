@@ -41,7 +41,11 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
       } else {
         setOrders((prev) => prev.filter((o) => o.id !== updated.id));
       }
-    }
+    },
+    // Beep saat INSERT jika order tsb memenuhi syarat masuk dapur
+    (order) => shouldShowInKitchen(order, tenant) ? "new" : false,
+    // Beep saat UPDATE jika order tsb baru masuk dapur (misal: kiosk baru dibayar)
+    (order) => order.order_status === "cooking" && shouldShowInKitchen(order, tenant) ? "new" : false
   );
 
   const markDone = useCallback(
@@ -123,14 +127,14 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
                 <div className="flex items-start justify-between">
                   <div>
                     <span
-                      className="text-3xl font-black"
+                      className="text-3xl font-black leading-none"
                       style={{ color: "var(--tenant-primary, #6366f1)" }}
                     >
                       #{order.queue_number}
                     </span>
                     {order.table_number && (
-                      <p className="text-sm" style={{ color: "#94a3b8" }}>
-                        Meja {order.table_number}
+                      <p className="mt-1.5 text-xs font-bold px-2 py-0.5 rounded w-fit border" style={{ background: "rgba(59, 130, 246, 0.15)", color: "#60a5fa", borderColor: "rgba(59, 130, 246, 0.3)" }}>
+                        🪑 Meja {order.table_number}
                       </p>
                     )}
                   </div>

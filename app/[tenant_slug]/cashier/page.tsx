@@ -10,7 +10,7 @@ import { toggleProductAvailability } from "@/services/productService";
 import { useRealtimeOrders } from "@/hooks/useRealtime";
 import type { Order, Tenant, Profile, Product, CartItem, PaymentMethodType } from "@/types";
 
-const { TabPane } = Tabs;
+
 
 const STATUS_COLOR: Record<string, string> = {
   pending: "orange", cooking: "blue", ready: "green",
@@ -68,8 +68,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     },
     (updated) => {
       setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)));
-    }
-  );
+    },
+    // Beep untuk semua pesanan baru
+    () => "new",
+    // Beep jika pesanan update ke status 'ready' (selesai dimasak)
+    (order) => order.order_status === "ready" ? "ready" : false  );
 
   const handleVoid = async (values: { reason: string }) => {
     if (!profile) return;
@@ -144,50 +147,76 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const columns = [
     {
       title: "Antrian / Meja",
+      width: 130,
       render: (_: unknown, r: Order) => (
-        <div>
-          <span className="font-bold text-lg" style={{ color: "var(--tenant-primary)" }}>
+        <div className="flex flex-col gap-1">
+          <span className="font-black text-2xl leading-none" style={{ color: "var(--tenant-primary)" }}>
             #{r.queue_number}
           </span>
           {r.table_number && (
-            <span className="ml-2 text-gray-500 text-sm">Meja {r.table_number}</span>
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 w-fit">
+              🪑 Meja {r.table_number}
+            </span>
           )}
-          {r.created_by_cashier && (
-            <span className="ml-2 text-xs px-1 bg-purple-100 text-purple-600 rounded">Kasir</span>
+          <div className="flex gap-1">
+            <span className={`text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-wider rounded w-fit ${r.created_by_cashier ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600"}`}>
+              {r.created_by_cashier ? "KASIR" : "KIOSK"}
+            </span>
+            <span className={`text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-wider rounded w-fit ${r.order_type === "takeaway" ? "bg-orange-100 text-orange-700" : "bg-teal-100 text-teal-700"}`}>
+              {r.order_type === "takeaway" ? "TAKEAWAY" : "DINE-IN"}
+            </span>
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: "Item Pesanan",
+      render: (_: unknown, r: Order) => (
+        <div className="text-sm space-y-1">
+          {r.items && r.items.length > 0 ? r.items.map((it, i) => (
+            <div key={i} className="flex items-start gap-1.5">
+              <span className="font-bold text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 flex-shrink-0">
+                ×{it.quantity}
+              </span>
+              <div>
+                <span className="font-medium">{it.product_name_snapshot}</span>
+                {it.notes && (
+                  <span className="block text-xs text-amber-600">📝 {it.notes}</span>
+                )}
+              </div>
+            </div>
+          )) : (
+            <span className="text-gray-400 text-xs">—</span>
+          )}
+          {r.customer_notes && (
+            <div className="mt-1 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded">
+              🗒️ {r.customer_notes}
+            </div>
           )}
         </div>
       ),
     },
     {
       title: "Status",
+      width: 120,
       render: (_: unknown, r: Order) => (
         <div className="flex flex-col gap-1">
           <Tag color={STATUS_COLOR[r.order_status]}>{r.order_status.toUpperCase()}</Tag>
           <Tag color={PAY_COLOR[r.payment_status]}>{r.payment_status.toUpperCase()}</Tag>
-        </div>
-      ),
-    },
-    {
-      title: "Items",
-      render: (_: unknown, r: Order) => (
-        <div className="text-sm">
-          {r.items?.map((it, i) => (
-            <div key={i}>
-              {it.quantity}× {it.product_name_snapshot}
-              {it.notes && <span className="text-gray-400"> ({it.notes})</span>}
-            </div>
-          ))}
+          {r.order_type === "takeaway" && <Tag color="orange">Takeaway</Tag>}
         </div>
       ),
     },
     {
       title: "Total",
+      width: 110,
       render: (_: unknown, r: Order) => (
-        <span className="font-semibold">Rp {r.total_amount.toLocaleString("id-ID")}</span>
+        <span className="font-semibold text-sm">Rp {r.total_amount.toLocaleString("id-ID")}</span>
       ),
     },
     {
       title: "Aksi",
+      width: 160,
       render: (_: unknown, r: Order) => (
         <div className="flex flex-wrap gap-1">
           {r.payment_status === "unpaid" && r.order_status !== "cancelled" && (
@@ -205,22 +234,23 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
               size="small"
               style={{ background: "#22c55e", color: "#fff", border: "none" }}
               onClick={() => Modal.confirm({
-                title: "Approve pesanan ini?",
+                title: "Terima pesanan ini? Pesanan akan diteruskan ke dapur",
                 onOk: () => handleApprove(r.id),
               })}
             >
-              Approve
+              Terima
             </Button>
           )}
           {r.order_status === "ready" && (
             <Button
               size="small"
+              style={{ background: "#3b82f6", color: "#fff", border: "none" }}
               onClick={() => Modal.confirm({
-                title: "Tandai selesai & ambil?",
+                title: "Tandai pesanan sudah diambil?",
                 onOk: () => handleReadyToComplete(r.id),
               })}
             >
-              Selesai
+              ✅ Selesai
             </Button>
           )}
           {r.order_status !== "cancelled" && r.order_status !== "completed" && (
@@ -268,91 +298,122 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       </header>
 
       <div className="p-6">
-        <Tabs defaultActiveKey="pending">
-          {showPendingTab && (
-            <TabPane
-              tab={
+        <Tabs
+          defaultActiveKey="pending"
+          items={[
+            ...(showPendingTab ? [{
+              key: "pending",
+              label: (
                 <Badge count={pendingBadge} offset={[10, 0]}>
                   <span>Menunggu</span>
                 </Badge>
-              }
-              key="pending"
-            >
-              <Table
-                dataSource={filterOrders(["pending"])}
-                columns={columns}
-                rowKey="id"
-                size="middle"
-              />
-            </TabPane>
-          )}
-          <TabPane tab="Sedang Dimasak" key="cooking">
-            <Table
-              dataSource={filterOrders(["cooking"])}
-              columns={columns}
-              rowKey="id"
-              size="middle"
-            />
-          </TabPane>
-          <TabPane tab="Siap Ambil" key="ready">
-            <Table
-              dataSource={filterOrders(["ready"])}
-              columns={columns}
-              rowKey="id"
-              size="middle"
-            />
-          </TabPane>
-          <TabPane tab="Selesai & Void" key="done">
-            <Table
-              dataSource={filterOrders(["completed", "cancelled"])}
-              columns={columns}
-              rowKey="id"
-              size="middle"
-            />
-          </TabPane>
-          <TabPane tab="Produk & Stok" key="stock">
-            <Table
-              dataSource={products}
-              rowKey="id"
-              size="middle"
-              columns={[
-                { title: "Produk", dataIndex: "name", key: "name" },
-                {
-                  title: "Stok",
-                  render: (_: unknown, r: Product) => (
-                    <InputNumber
-                      value={r.stock_count ?? undefined}
-                      placeholder="∞"
-                      min={0}
-                      onChange={async (val) => {
-                        await toggleProductAvailability(r.id, (val ?? 0) > 0, val ?? null);
-                        if (tenant) {
-                          const fresh = await getAllProductsByTenant(tenant.id);
-                          setProducts(fresh);
-                        }
-                      }}
-                    />
-                  ),
-                },
-                {
-                  title: "Tersedia",
-                  render: (_: unknown, r: Product) => (
-                    <Switch
-                      checked={r.is_available}
-                      onChange={async (v) => {
-                        await toggleProductAvailability(r.id, v);
-                        if (tenant) {
-                          const fresh = await getAllProductsByTenant(tenant.id);
-                          setProducts(fresh);
-                        }
-                      }}
-                    />
-                  ),
-                },
-              ]}
-            />
-          </TabPane>
-        </Tabs>
+              ),
+              children: (
+                <Table
+                  dataSource={filterOrders(["pending"])}
+                  columns={columns}
+                  rowKey="id"
+                  size="middle"
+                />
+              ),
+            }] : []),
+            {
+              key: "cooking",
+              label: (
+                <Badge count={filterOrders(["cooking"]).length} offset={[10, 0]} color="blue">
+                  <span>Sedang Dimasak</span>
+                </Badge>
+              ),
+              children: (
+                <Table
+                  dataSource={filterOrders(["cooking"])}
+                  columns={columns}
+                  rowKey="id"
+                  size="middle"
+                />
+              ),
+            },
+            {
+              key: "ready",
+              label: (
+                <Badge count={filterOrders(["ready"]).length} offset={[10, 0]} color="green">
+                  <span>Siap Ambil</span>
+                </Badge>
+              ),
+              children: (
+                <Table
+                  dataSource={filterOrders(["ready"])}
+                  columns={columns}
+                  rowKey="id"
+                  size="middle"
+                />
+              ),
+            },
+            {
+              key: "done",
+              label: (
+                <Badge count={filterOrders(["completed", "cancelled"]).length} offset={[10, 0]} color="#1677ff" overflowCount={999}>
+                  <span>Selesai & Void</span>
+                </Badge>
+              ),
+              children: (
+                <Table
+                  dataSource={filterOrders(["completed", "cancelled"])}
+                  columns={columns}
+                  rowKey="id"
+                  size="middle"
+                />
+              ),
+            },
+            {
+              key: "stock",
+              label: "Produk & Stok",
+              children: (
+                <Table
+                  dataSource={products}
+                  rowKey="id"
+                  size="middle"
+                  columns={[
+                    { title: "Produk", dataIndex: "name", key: "name" },
+                    {
+                      title: "Stok",
+                      render: (_: unknown, r: Product) => (
+                        <InputNumber
+                          value={r.stock_count ?? undefined}
+                          placeholder="∞"
+                          min={0}
+                          onChange={async (val) => {
+                            await toggleProductAvailability(r.id, (val ?? 0) > 0, val ?? null);
+                            if (tenant) {
+                              const fresh = await getAllProductsByTenant(tenant.id);
+                              setProducts(fresh);
+                            }
+                          }}
+                        />
+                      ),
+                    },
+                    {
+                      title: "Tersedia",
+                      render: (_: unknown, r: Product) => (
+                        <Switch
+                          checked={r.is_available}
+                          onChange={async (v) => {
+                            await toggleProductAvailability(r.id, v);
+                            if (tenant) {
+                              const fresh = await getAllProductsByTenant(tenant.id);
+                              setProducts(fresh);
+                            }
+                          }}
+                        />
+                      ),
+                    },
+                  ]}
+                />
+              ),
+            },
+          ]}
+        />
+
       </div>
 
       {/* Void Modal */}
@@ -399,7 +460,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       <Drawer
         title="Input Pesanan Manual"
         placement="right"
-        width={480}
+        size="large"
         open={newOrderDrawer}
         onClose={() => { setNewOrderDrawer(false); setCart([]); }}
         footer={

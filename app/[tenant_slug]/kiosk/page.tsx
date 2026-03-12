@@ -109,7 +109,7 @@ export default function KioskPage({
       {
         tenant_id: tenant.id,
         queue_number: qn,
-        table_number: tableRecord?.table_number,
+        table_number: tableRecord?.table_number ?? tableInputValue,
         table_id: tableRecord?.id,
         order_type: orderType,
         subtotal,
@@ -150,6 +150,21 @@ export default function KioskPage({
   const filteredProducts = products.filter((p) =>
     selectedCategory ? p.category_id === selectedCategory : true
   );
+
+  // Auto redirect setelah sukses
+  useEffect(() => {
+    let timeout: NodeJS.Timeout;
+    if (
+      screen === "success" ||
+      (screen === "payment" && tenant?.business_logic.payment_timing === "postpaid")
+    ) {
+      timeout = setTimeout(() => {
+        setScreen("order_type");
+        setCart([]);
+      }, 30000);
+    }
+    return () => clearTimeout(timeout);
+  }, [screen, tenant?.business_logic.payment_timing]);
 
   if (!tenant) return null;
 
@@ -639,6 +654,17 @@ export default function KioskPage({
                     #{queueNumber}
                   </p>
                 </div>
+                <motion.button
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => {
+                    setScreen("order_type");
+                    setCart([]);
+                  }}
+                  className="mt-4 px-8 py-3 rounded-xl font-medium"
+                  style={{ background: "var(--tenant-primary)", color: "white" }}
+                >
+                  Kembali ke Menu Utama
+                </motion.button>
               </>
             ) : bl.payment_mode === "manual" ? (
               <>
@@ -709,7 +735,7 @@ export default function KioskPage({
               }}
               className="bg-white/20 text-white px-8 py-3 rounded-xl font-medium"
             >
-              Pesanan Baru
+              Kembali ke Menu Utama
             </motion.button>
           </motion.div>
         )}

@@ -63,6 +63,33 @@ export default function SuperAdminPage() {
   const [editingCat, setEditingCat] = useState<Category | null>(null);
   const [editingProd, setEditingProd] = useState<Product | null>(null);
 
+  useEffect(() => {
+    if (catModalOpen) {
+      if (editingCat) {
+        catForm.setFieldsValue({ name: editingCat.name, sort_order: editingCat.sort_order, is_active: editingCat.is_active });
+      } else {
+        catForm.resetFields();
+      }
+    }
+  }, [catModalOpen, editingCat, catForm]);
+
+  useEffect(() => {
+    if (prodModalOpen) {
+      if (editingProd) {
+        prodForm.setFieldsValue({
+          name: editingProd.name, description: editingProd.description,
+          base_price: editingProd.base_price, image_url: editingProd.image_urls[0] ?? "",
+          category_id: editingProd.category_id, is_available: editingProd.is_available,
+          is_featured: editingProd.is_featured, stock_count: editingProd.stock_count,
+          sort_order: editingProd.sort_order, labels: editingProd.labels.join(", "),
+        });
+      } else {
+        prodForm.resetFields();
+        prodForm.setFieldsValue({ is_available: true, is_featured: false });
+      }
+    }
+  }, [prodModalOpen, editingProd, prodForm]);
+
   const [step1Form] = Form.useForm();
   const [step2Form] = Form.useForm();
   const [step3Form] = Form.useForm();
@@ -213,7 +240,12 @@ export default function SuperAdminPage() {
 
   const saveProd = async (vals: Record<string, unknown>) => {
     if (!menuDrawer.tenant) return;
-    const payload = { ...vals, image_urls: vals.image_url ? [vals.image_url] : [], labels: ((vals.labels as string) ?? "").split(",").map((s: string) => s.trim()).filter(Boolean) };
+    const { image_url, labels: labelsRaw, ...rest } = vals;
+    const payload = {
+      ...rest,
+      image_urls: image_url ? [image_url] : [],
+      labels: ((labelsRaw as string) ?? "").split(",").map((s: string) => s.trim()).filter(Boolean),
+    };
     if (editingProd) {
       await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "product", _itemId: editingProd.id, ...payload }) });
     } else {
@@ -236,7 +268,7 @@ export default function SuperAdminPage() {
     {
       title: "Tenant",
       render: (_: unknown, t: Tenant) => (
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <Space>
             <span style={{ width: 12, height: 12, borderRadius: "50%", background: t.visual_config.primary_color, display: "inline-block", flexShrink: 0 }} />
             <span className="font-semibold">{t.name}</span>
@@ -299,7 +331,12 @@ export default function SuperAdminPage() {
         </Col>
         <Col span={10}>
           <Form.Item name="slug" label="Slug URL" rules={[{ required: true }, { pattern: /^[a-z0-9-]+$/, message: "Hanya a-z, 0-9, tanda hubung" }]} extra={<span style={{ fontSize: 11 }}>domain.com/<b>slug</b>/kiosk</span>}>
-            <Input placeholder="kafe-asik" size="large" addonBefore="/" />
+            <Input placeholder="kafe-asik" size="large"
+              onChange={(e) => {
+                const clean = e.target.value.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+                step1Form.setFieldValue("slug", clean);
+              }}
+            />
           </Form.Item>
         </Col>
       </Row>
@@ -367,7 +404,10 @@ export default function SuperAdminPage() {
       <Row gutter={12}>
         <Col span={8}><Form.Item name="tax_percentage" label="PPN (%)"><InputNumber min={0} max={100} style={{ width: "100%" }} /></Form.Item></Col>
         <Col span={8}><Form.Item name="service_charge_percentage" label="Service Charge (%)"><InputNumber min={0} max={100} style={{ width: "100%" }} /></Form.Item></Col>
-        <Col span={8}><Form.Item name="takeaway_fee" label="Biaya Takeaway (Rp)"><InputNumber min={0} formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".")} style={{ width: "100%" }} /></Form.Item></Col>
+        <Col span={8}><Form.Item name="takeaway_fee" label="Biaya Takeaway (Rp)"><InputNumber min={0}
+          formatter={(v) => Number(v || 0).toLocaleString("id-ID")}
+          parser={(v) => Number((v ?? "").replace(/[^\d]/g, "")) as unknown as 0}
+          style={{ width: "100%" }} /></Form.Item></Col>
       </Row>
       <Divider style={{ margin: "12px 0", fontSize: 13 }}>Struk / Receipt</Divider>
       <Form.Item name="receipt_header" label="Header Struk"><Input.TextArea rows={2} placeholder={"Nama Kafe\nAlamat Lengkap\nNo. Telp"} /></Form.Item>
@@ -450,7 +490,7 @@ export default function SuperAdminPage() {
               <Col xs={24} sm={8} key={s.title}>
                 <Card style={{ borderRadius: 14, border: "none", boxShadow: "0 2px 8px rgba(0,0,0,.06)" }}>
                   <Statistic title={<span style={{ color: "#64748b" }}>{s.title}</span>} value={s.value}
-                    prefix={<span style={{ fontSize: 18, marginRight: 4 }}>{s.icon}</span>} valueStyle={{ color: s.color, fontWeight: 700 }} />
+                    prefix={<span style={{ fontSize: 18, marginRight: 4 }}>{s.icon}</span>} styles={{ content: {color: s.color, fontWeight: 700} }} />
                 </Card>
               </Col>
             ))}
@@ -489,7 +529,7 @@ export default function SuperAdminPage() {
         onCancel={() => setWizardOpen(false)}
         footer={null}
         width={640}
-        destroyOnClose
+        destroyOnHidden
       >
         {/* Steps indicator */}
         <Steps
@@ -554,7 +594,7 @@ export default function SuperAdminPage() {
           </Space>
         }
         placement="right"
-        width={720}
+        size="large"
         open={menuDrawer.open}
         onClose={() => setMenuDrawer({ open: false, tenant: null })}
         extra={
@@ -590,7 +630,10 @@ export default function SuperAdminPage() {
                   {
                     title: "Aksi", width: 100, render: (_: unknown, r: Category) => (
                       <Space>
-                        <Button size="small" icon={<EditOutlined />} onClick={() => { setEditingCat(r); catForm.setFieldsValue({ name: r.name, sort_order: r.sort_order, is_active: r.is_active }); setCatModalOpen(true); }} />
+                      <Button size="small" icon={<EditOutlined />} onClick={() => {
+                          setEditingCat(r);
+                          setCatModalOpen(true); // form values diset via useEffect
+                        }} />
                         <Popconfirm title="Hapus kategori ini?" onConfirm={() => deleteCat(r.id)} okText="Hapus" okButtonProps={{ danger: true }}>
                           <Button size="small" danger icon={<DeleteOutlined />} />
                         </Popconfirm>
@@ -603,7 +646,10 @@ export default function SuperAdminPage() {
           ) : (
             <motion.div key="prods" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingProd(null); prodForm.resetFields(); setProdModalOpen(true); }} style={{ background: "#6366f1", borderColor: "#6366f1" }}>
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => {
+                    setEditingProd(null);
+                    setProdModalOpen(true); // reset via useEffect
+                  }} style={{ background: "#6366f1", borderColor: "#6366f1" }}>
                   Tambah Produk
                 </Button>
               </div>
@@ -613,7 +659,7 @@ export default function SuperAdminPage() {
                 loading={menuLoading}
                 pagination={{ pageSize: 10 }}
                 columns={[
-                  { title: "Produk", render: (_: unknown, r: Product) => <Space direction="vertical" size={0}><span className="font-medium">{r.name}</span><span style={{ color: "#94a3b8", fontSize: 12 }}>Rp {Number(r.base_price).toLocaleString("id-ID")}</span></Space> },
+                  { title: "Produk", render: (_: unknown, r: Product) => <Space orientation="vertical" size={0}><span className="font-medium">{r.name}</span><span style={{ color: "#94a3b8", fontSize: 12 }}>Rp {Number(r.base_price).toLocaleString("id-ID")}</span></Space> },
                   { title: "Kategori", render: (_: unknown, r: Product) => { const cat = menuData.categories.find(c => c.id === r.category_id); return cat?.name ?? <span style={{ color: "#94a3b8" }}>—</span>; } },
                   { title: "Label", render: (_: unknown, r: Product) => r.labels.map(l => <Tag key={l} style={{ fontSize: 11 }}>{l}</Tag>) },
                   { title: "Stok / Status", render: (_: unknown, r: Product) => <Space><Tag color={r.is_available ? "green" : "red"}>{r.is_available ? "Tersedia" : "Habis"}</Tag>{r.stock_count != null && <Tag>{r.stock_count}</Tag>}</Space> },
@@ -621,10 +667,9 @@ export default function SuperAdminPage() {
                     title: "Aksi", width: 90, render: (_: unknown, r: Product) => (
                       <Space>
                         <Button size="small" icon={<EditOutlined />} onClick={() => {
-                          setEditingProd(r);
-                          prodForm.setFieldsValue({ name: r.name, description: r.description, base_price: r.base_price, image_url: r.image_urls[0] ?? "", category_id: r.category_id, is_available: r.is_available, is_featured: r.is_featured, stock_count: r.stock_count, sort_order: r.sort_order, labels: r.labels.join(", ") });
-                          setProdModalOpen(true);
-                        }} />
+                            setEditingProd(r);
+                            setProdModalOpen(true); // values diset via useEffect
+                          }} />
                         <Popconfirm title="Hapus produk ini?" onConfirm={() => deleteProd(r.id)} okText="Hapus" okButtonProps={{ danger: true }}>
                           <Button size="small" danger icon={<DeleteOutlined />} />
                         </Popconfirm>
@@ -639,7 +684,9 @@ export default function SuperAdminPage() {
       </Drawer>
 
       {/* Category Modal */}
-      <Modal title={editingCat ? "Edit Kategori" : "Tambah Kategori"} open={catModalOpen} onCancel={() => setCatModalOpen(false)} onOk={() => catForm.submit()} okText="Simpan" destroyOnClose>
+      <Modal title={editingCat ? "Edit Kategori" : "Tambah Kategori"} open={catModalOpen}
+        onCancel={() => { setCatModalOpen(false); setEditingCat(null); }}
+        onOk={() => catForm.submit()} okText="Simpan">
         <Form form={catForm} onFinish={saveCat} layout="vertical">
           <Form.Item name="name" label="Nama Kategori" rules={[{ required: true }]}><Input placeholder="Kopi Panas" /></Form.Item>
           <Form.Item name="sort_order" label="Urutan Tampil"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
@@ -648,11 +695,16 @@ export default function SuperAdminPage() {
       </Modal>
 
       {/* Product Modal */}
-      <Modal title={editingProd ? "Edit Produk" : "Tambah Produk"} open={prodModalOpen} onCancel={() => setProdModalOpen(false)} onOk={() => prodForm.submit()} okText="Simpan" width={560} destroyOnClose>
+      <Modal title={editingProd ? "Edit Produk" : "Tambah Produk"} open={prodModalOpen}
+        onCancel={() => { setProdModalOpen(false); setEditingProd(null); }}
+        onOk={() => prodForm.submit()} okText="Simpan" width={560}>
         <Form form={prodForm} onFinish={saveProd} layout="vertical" requiredMark="optional">
           <Row gutter={12}>
             <Col span={16}><Form.Item name="name" label="Nama Produk" rules={[{ required: true }]}><Input placeholder="Espresso" /></Form.Item></Col>
-            <Col span={8}><Form.Item name="base_price" label="Harga Dasar (Rp)" rules={[{ required: true }]}><InputNumber min={0} formatter={v => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".")} style={{ width: "100%" }} /></Form.Item></Col>
+            <Col span={8}><Form.Item name="base_price" label="Harga Dasar (Rp)" rules={[{ required: true }]}><InputNumber min={0}
+              formatter={(v) => Number(v || 0).toLocaleString("id-ID")}
+              parser={(v) => Number((v ?? "").replace(/[^\d]/g, "")) as unknown as 0}
+              style={{ width: "100%" }} /></Form.Item></Col>
           </Row>
           <Form.Item name="description" label="Deskripsi"><Input.TextArea rows={2} /></Form.Item>
           <Row gutter={12}>
