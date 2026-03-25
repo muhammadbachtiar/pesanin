@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { getOrdersByTenant, updateOrderStatus } from "@/services/orderService";
+import { getOrdersByTenant, getOrderById, updateOrderStatus } from "@/services/orderService";
 import { getTenantBySlug } from "@/services/tenantService";
 import { useRealtimeOrders } from "@/hooks/useRealtime";
 import type { Order, Tenant } from "@/types";
@@ -26,25 +26,27 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
 
   useRealtimeOrders(
     tenant?.id ?? "",
-    (newOrder) => {
-      if (shouldShowInKitchen(newOrder, tenant)) {
-        setOrders((prev) => [newOrder, ...prev]);
-      }
+    async (newOrder) => {
+      if (!shouldShowInKitchen(newOrder, tenant)) return;
+      // Realtime payload doesn't include joined items — fetch full order
+      const full = await getOrderById(newOrder.id);
+      if (full) setOrders((prev) => [full, ...prev.filter((o) => o.id !== full.id)]);
     },
-    (updated) => {
+    async (updated) => {
       if (updated.order_status === "cooking" && shouldShowInKitchen(updated, tenant)) {
-        setOrders((prev) =>
-          prev.find((o) => o.id === updated.id)
-            ? prev.map((o) => (o.id === updated.id ? updated : o))
-            : [updated, ...prev]
-        );
+        const full = await getOrderById(updated.id);
+        if (full) {
+          setOrders((prev) =>
+            prev.find((o) => o.id === full.id)
+              ? prev.map((o) => (o.id === full.id ? full : o))
+              : [full, ...prev]
+          );
+        }
       } else {
         setOrders((prev) => prev.filter((o) => o.id !== updated.id));
       }
     },
-    // Beep saat INSERT jika order tsb memenuhi syarat masuk dapur
     (order) => shouldShowInKitchen(order, tenant) ? "new" : false,
-    // Beep saat UPDATE jika order tsb baru masuk dapur (misal: kiosk baru dibayar)
     (order) => order.order_status === "cooking" && shouldShowInKitchen(order, tenant) ? "new" : false
   );
 
@@ -150,7 +152,7 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
                   className="border-t pt-3 space-y-2"
                   style={{ borderColor: "var(--color-dark-border)" }}
                 >
-                  {order.items?.map((item, i) => (
+                  {order.items && order.items.length > 0 ? order.items.map((item, i) => (
                     <div key={i}>
                       <p className="font-semibold">
                         {item.quantity}× {item.product_name_snapshot}
@@ -169,7 +171,9 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
                         </p>
                       )}
                     </div>
-                  ))}
+                  )) : (
+                    <p className="text-xs" style={{ color: "#64748b" }}>Memuat detail pesanan...</p>
+                  )}
                 </div>
 
                 {order.customer_notes && (

@@ -35,6 +35,9 @@ export default function KioskPage({
   const [tableInputValue, setTableInputValue] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [activeProduct, setActiveProduct] = useState<Product | null>(null);
+  const [modalQuantity, setModalQuantity] = useState(1);
+  const [modalNotes, setModalNotes] = useState("");
+  const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
   const [queueNumber, setQueueNumber] = useState<string>("");
   const slugRef = useRef<string>("");
@@ -75,21 +78,60 @@ export default function KioskPage({
     sessionStorage.setItem(`cart:${slugRef.current}`, JSON.stringify(items));
   };
 
-  const addToCart = (product: Product) => {
+  const addToCart = (product: Product, quantity = 1, notes = "") => {
+    if (quantity <= 0) return;
     const unit_price = product.base_price;
-    const existing = cart.find(
-      (c) => c.product.id === product.id && c.selected_variants.length === 0
+    const existingIndex = cart.findIndex(
+      (c) => c.product.id === product.id && c.selected_variants.length === 0 && (c.notes || "") === notes
     );
-    const updated = existing
-      ? cart.map((c) =>
-          c.product.id === product.id ? { ...c, quantity: c.quantity + 1 } : c
-        )
-      : [...cart, { product, quantity: 1, selected_variants: [], notes: "", unit_price }];
+    const updated = [...cart];
+    if (existingIndex >= 0) {
+      updated[existingIndex].quantity += quantity;
+    } else {
+      updated.push({ product, quantity, selected_variants: [], notes, unit_price });
+    }
+    saveCart(updated);
+  };
+
+  const decreaseProductQuantity = (productId: string) => {
+    let idx = cart.findIndex(c => c.product.id === productId && !c.notes);
+    if (idx === -1) idx = cart.findIndex(c => c.product.id === productId);
+    if (idx !== -1) {
+      const updated = [...cart];
+      if (updated[idx].quantity > 1) {
+        updated[idx].quantity -= 1;
+      } else {
+        updated.splice(idx, 1);
+      }
+      saveCart(updated);
+    }
+  };
+
+  const updateCartItemQuantity = (index: number, quantity: number) => {
+    if (quantity <= 0) {
+      setConfirmDeleteIndex(index);
+      return;
+    }
+    const updated = [...cart];
+    updated[index].quantity = quantity;
+    saveCart(updated);
+  };
+
+  const updateCartItemNotes = (index: number, notes: string) => {
+    const updated = [...cart];
+    updated[index].notes = notes;
     saveCart(updated);
   };
 
   const removeFromCart = (index: number) => {
-    saveCart(cart.filter((_, i) => i !== index));
+    setConfirmDeleteIndex(index);
+  };
+
+  const confirmRemoveAction = () => {
+    if (confirmDeleteIndex !== null) {
+      saveCart(cart.filter((_, i) => i !== confirmDeleteIndex));
+      setConfirmDeleteIndex(null);
+    }
   };
 
   const totalItems = cart.reduce((s, c) => s + c.quantity, 0);
@@ -205,7 +247,7 @@ export default function KioskPage({
             </motion.h1>
             {tenant.subtitle && (
               <motion.p
-                className="text-white/70 mt-2 text-lg"
+                className="text-white/80 mt-3 text-lg text-center px-8 max-w-md mx-auto leading-relaxed"
                 initial={{ y: 10, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
                 transition={{ delay: 0.5 }}
@@ -336,9 +378,11 @@ export default function KioskPage({
                       style={{ background: "#fff", border: "1.5px solid #e2e8f0" }}
                     >
                       {product.image_urls[0] ? (
-                        <img src={product.image_urls[0]} alt={product.name} className="w-full h-20 object-cover" />
+                        <div className="w-full h-28 bg-gray-50 flex items-center justify-center p-1">
+                          <img src={product.image_urls[0]} alt={product.name} className="w-full h-full object-contain rounded" />
+                        </div>
                       ) : (
-                        <div className="w-full h-20 flex items-center justify-center text-2xl" style={{ background: "var(--tenant-primary)18" }}>🍽️</div>
+                        <div className="w-full h-28 flex items-center justify-center text-2xl" style={{ background: "var(--tenant-primary)18" }}>🍽️</div>
                       )}
                       <div className="p-2">
                         <p className="font-semibold text-xs line-clamp-1">{product.name}</p>
@@ -352,10 +396,10 @@ export default function KioskPage({
               </div>
             )}
 
-            {/* Product grid 3 kolom */}
-            <div className="flex-1 px-3 py-3 grid grid-cols-3 gap-2 pb-28 content-start">
+            {/* Product grid responsive */}
+            <div className="flex-1 px-3 py-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-4 pb-28 content-start">
               {filteredProducts.length === 0 && (
-                <div className="col-span-3 flex flex-col items-center justify-center py-16 text-gray-400">
+                <div className="col-span-full flex flex-col items-center justify-center py-16 text-gray-400">
                   <span className="text-4xl mb-2">🍽️</span>
                   <p className="text-sm">Belum ada menu di kategori ini</p>
                 </div>
@@ -366,7 +410,11 @@ export default function KioskPage({
                   <motion.div
                     key={product.id}
                     whileTap={{ scale: 0.96 }}
-                    onClick={() => addToCart(product)}
+                    onClick={() => {
+                      setActiveProduct(product);
+                      setModalQuantity(1);
+                      setModalNotes("");
+                    }}
                     className="relative cursor-pointer rounded-xl overflow-hidden flex flex-col"
                     style={{
                       background: "#fff",
@@ -383,13 +431,15 @@ export default function KioskPage({
                       </span>
                     )}
                     {product.image_urls[0] ? (
-                      <img src={product.image_urls[0]} alt={product.name} className="w-full object-cover" style={{ height: 72 }} />
+                      <div className="w-full bg-gray-50 flex items-center justify-center p-1" style={{ height: 110 }}>
+                        <img src={product.image_urls[0]} alt={product.name} className="w-full h-full object-contain rounded" />
+                      </div>
                     ) : (
-                      <div className="w-full flex items-center justify-center text-2xl" style={{ height: 72, background: "var(--tenant-primary)12" }}>🍽️</div>
+                      <div className="w-full flex items-center justify-center text-2xl" style={{ height: 110, background: "var(--tenant-primary)12" }}>🍽️</div>
                     )}
-                    <div className="p-2 flex flex-col flex-1">
+                    <div className="p-3 flex flex-col flex-1">
                       {(product.is_featured || product.labels.length > 0) && (
-                        <div className="flex flex-wrap gap-0.5 mb-1">
+                        <div className="flex flex-wrap gap-0.5 mb-1.5">
                           {product.is_featured && (
                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full text-white" style={{ background: "var(--tenant-primary)" }}>⭐</span>
                           )}
@@ -402,16 +452,35 @@ export default function KioskPage({
                       )}
                       <p className="font-semibold text-xs leading-tight line-clamp-2">{product.name}</p>
                       {product.description && (
-                        <p className="text-[10px] text-gray-400 mt-0.5 line-clamp-1">{product.description}</p>
+                        <p className="text-[10px] text-gray-400 mt-1 line-clamp-4 leading-snug">{product.description}</p>
                       )}
-                      <div className="mt-auto pt-1.5 flex items-center justify-between gap-1">
+                      <div className="mt-auto pt-2.5 flex items-center justify-between gap-1">
                         <p className="text-[11px] font-bold leading-none" style={{ color: "var(--tenant-primary)" }}>
                           Rp {Number(product.base_price).toLocaleString("id-ID")}
                         </p>
-                        <div
-                          className="w-5 h-5 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
-                          style={{ background: "var(--tenant-primary)" }}
-                        >+</div>
+                        {inCart > 0 ? (
+                          <div className="flex items-center gap-1.5 bg-[var(--tenant-primary)] rounded-full p-0.5" style={{ background: "var(--tenant-primary)" }}>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); decreaseProductQuantity(product.id); }}
+                              className="w-6 h-6 rounded-full bg-black/10 text-white flex items-center justify-center font-bold text-lg leading-none"
+                            >-</button>
+                            <span className="text-white text-[11px] font-bold w-3 text-center leading-none">{inCart}</span>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); addToCart(product, 1, ""); }}
+                              className="w-6 h-6 rounded-full bg-white flex items-center justify-center font-bold text-lg leading-none"
+                              style={{ color: "var(--tenant-primary)" }}
+                            >+</button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              addToCart(product, 1, "");
+                            }}
+                            className="w-7 h-7 rounded-full flex items-center justify-center text-white text-lg font-bold flex-shrink-0 active:scale-90 transition-transform"
+                            style={{ background: "var(--tenant-primary)" }}
+                          >+</button>
+                        )}
                       </div>
                     </div>
                   </motion.div>
@@ -462,25 +531,48 @@ export default function KioskPage({
             </header>
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {cart.map((item, i) => (
-                <div key={i} className="card p-4 flex items-center gap-3">
-                  <div className="flex-1">
-                    <p className="font-semibold">{item.product.name}</p>
-                    <p className="text-sm text-gray-500">
-                      Rp {item.unit_price.toLocaleString("id-ID")} × {item.quantity}
-                    </p>
-                    {item.notes && (
-                      <p className="text-xs text-gray-400 mt-0.5">📝 {item.notes}</p>
+                <div key={i} className="card p-4 flex flex-col gap-3">
+                  <div className="flex items-start gap-3">
+                    {item.product.image_urls[0] ? (
+                      <div className="w-16 h-16 rounded-xl bg-gray-50 flex-shrink-0 flex items-center justify-center p-1 border">
+                        <img src={item.product.image_urls[0]} alt={item.product.name} className="w-full h-full object-contain rounded-lg" />
+                      </div>
+                    ) : (
+                      <div className="w-16 h-16 rounded-xl flex-shrink-0 flex items-center justify-center text-3xl border" style={{ background: "var(--tenant-primary)12" }}>🍽️</div>
                     )}
+                    <div className="flex-1 flex items-start justify-between gap-2">
+                      <div className="flex-1">
+                        <p className="font-semibold text-base leading-tight mt-0.5">{item.product.name}</p>
+                        <p className="text-sm font-bold mt-1" style={{ color: "var(--tenant-primary)" }}>
+                          Rp {item.unit_price.toLocaleString("id-ID")}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <p className="font-bold text-lg flex-shrink-0">
+                          Rp {(item.unit_price * item.quantity).toLocaleString("id-ID")}
+                        </p>
+                        <button
+                          onClick={() => removeFromCart(i)}
+                          className="text-red-400 text-xs font-bold mt-1"
+                        >
+                          Hapus ✕
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <p className="font-bold" style={{ color: "var(--tenant-primary)" }}>
-                    Rp {(item.unit_price * item.quantity).toLocaleString("id-ID")}
-                  </p>
-                  <button
-                    onClick={() => removeFromCart(i)}
-                    className="text-red-400 text-xl p-1"
-                  >
-                    ✕
-                  </button>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => updateCartItemQuantity(i, item.quantity - 1)} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-lg">-</button>
+                        <input type="number" value={item.quantity === 0 ? "" : item.quantity} onChange={(e) => updateCartItemQuantity(i, parseInt(e.target.value) || 0)} className="w-12 text-center bg-gray-50 border rounded-lg py-1.5 text-sm font-bold" />
+                        <button onClick={() => updateCartItemQuantity(i, item.quantity + 1)} className="w-9 h-9 rounded-full text-white flex items-center justify-center font-bold text-lg" style={{ background: "var(--tenant-primary)" }}>+</button>
+                    </div>
+                    <input 
+                        value={item.notes || ""} 
+                        onChange={(e) => updateCartItemNotes(i, e.target.value)} 
+                        placeholder="Tulis Opsional (Minta Pedas, dsb...)" 
+                        className="flex-1 text-sm p-2 bg-gray-50 border border-gray-100 rounded-xl outline-none focus:border-[var(--tenant-primary)] placeholder-gray-400"
+                    />
+                  </div>
                 </div>
               ))}
             </div>
@@ -738,6 +830,147 @@ export default function KioskPage({
               Kembali ke Menu Utama
             </motion.button>
           </motion.div>
+        )}
+
+        {/* PRODUCT DETAIL MODAL */}
+        {activeProduct && (
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
+            <motion.div
+              className="absolute inset-0 bg-black/40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setActiveProduct(null)}
+            />
+            <motion.div
+              className="bg-white rounded-t-3xl sm:rounded-2xl w-full max-w-sm flex flex-col overflow-hidden z-10"
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              style={{ maxHeight: "90vh" }}
+            >
+              {activeProduct.image_urls[0] ? (
+                <div className="w-full bg-gray-50 flex items-center justify-center p-2" style={{ height: 240 }}>
+                  <img src={activeProduct.image_urls[0]} alt={activeProduct.name} className="w-full h-full object-contain" />
+                </div>
+              ) : (
+                <div className="w-full flex items-center justify-center text-5xl" style={{ height: 200, background: "var(--tenant-primary)18" }}>🍽️</div>
+              )}
+              
+              <div className="p-5 overflow-y-auto flex-1 flex flex-col gap-3">
+                <div className="flex justify-between items-start gap-4">
+                  <h2 className="text-xl font-bold leading-tight">{activeProduct.name}</h2>
+                  <p className="font-bold text-lg flex-shrink-0" style={{ color: "var(--tenant-primary)" }}>
+                    Rp {Number(activeProduct.base_price).toLocaleString("id-ID")}
+                  </p>
+                </div>
+
+                {(activeProduct.is_featured || activeProduct.labels.length > 0) && (
+                  <div className="flex flex-wrap gap-1">
+                    {activeProduct.is_featured && (
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: "var(--tenant-primary)" }}>⭐ Unggulan</span>
+                    )}
+                    {activeProduct.labels.map((l) => (
+                      <span key={l} className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 capitalize">
+                        {l.replace(/_/g, " ")}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-2">
+                  <h3 className="text-sm font-bold text-gray-800 mb-1">Deskripsi</h3>
+                  <p className="text-gray-500 text-sm leading-relaxed whitespace-pre-wrap">
+                    {activeProduct.description || "Tidak ada deskripsi tersedia untuk produk ini."}
+                  </p>
+                </div>
+                <div className="mt-1 flex flex-col gap-4 border-t pt-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-800 mb-2">Jumlah Pesanan</h3>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => setModalQuantity(Math.max(1, modalQuantity - 1))} className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-xl">-</button>
+                      <input type="number" value={modalQuantity || ""} onChange={(e) => setModalQuantity(Math.max(1, parseInt(e.target.value) || 1))} className="w-16 h-10 text-center text-lg font-bold border-b-2 bg-transparent outline-none p-1" style={{ borderColor: 'var(--tenant-primary)' }} />
+                      <button onClick={() => setModalQuantity(modalQuantity + 1)} className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-xl" style={{ background: "var(--tenant-primary)" }}>+</button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="text-sm font-bold text-gray-800 mb-2">Catatan Tambahan</h3>
+                    <textarea 
+                      value={modalNotes} 
+                      onChange={(e) => setModalNotes(e.target.value)} 
+                      placeholder="Contoh: Jangan terlalu pedas, tambah es, dll." 
+                      className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-[var(--tenant-primary)] text-sm"
+                      rows={2}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 border-t flex gap-3 bg-white">
+                <button
+                  className="px-6 py-4 rounded-xl font-bold border-2 text-gray-600 border-gray-200"
+                  onClick={() => setActiveProduct(null)}
+                >
+                  Tutup
+                </button>
+                <button
+                  className="flex-1 py-4 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-lg active:scale-95 transition-transform"
+                  style={{ background: "var(--tenant-primary)" }}
+                  onClick={() => {
+                    addToCart(activeProduct, modalQuantity, modalNotes);
+                    setActiveProduct(null);
+                  }}
+                >
+                  Tambah <span>Rp {(Number(activeProduct.base_price) * modalQuantity).toLocaleString("id-ID")}</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* CONFIRM DELETE MODAL */}
+        {confirmDeleteIndex !== null && cart[confirmDeleteIndex] && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div
+              className="absolute inset-0 bg-black/40"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setConfirmDeleteIndex(null)}
+            />
+            <motion.div
+              className="bg-white rounded-3xl w-full max-w-sm flex flex-col overflow-hidden z-[61] shadow-2xl"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            >
+              <div className="p-6 text-center pt-8">
+                <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center text-red-500 text-3xl mx-auto mb-4">
+                  🗑️
+                </div>
+                <h2 className="text-xl font-bold mb-2">Hapus dari Keranjang?</h2>
+                <p className="text-gray-500 text-sm">
+                  Apakah Anda yakin ingin menghapus <strong className="text-gray-800">{cart[confirmDeleteIndex].product.name}</strong> dari pesanan Anda?
+                </p>
+              </div>
+              <div className="p-4 bg-gray-50 flex gap-3 border-t border-gray-100">
+                <button
+                  className="flex-1 py-3.5 rounded-xl font-bold text-gray-600 bg-white border shadow-sm active:scale-95 transition-transform"
+                  onClick={() => setConfirmDeleteIndex(null)}
+                >
+                  Batal
+                </button>
+                <button
+                  className="flex-1 py-3.5 rounded-xl font-bold text-white bg-red-500 shadow-sm shadow-red-500/30 active:scale-95 transition-transform"
+                  onClick={confirmRemoveAction}
+                >
+                  Hapus
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
 
       </AnimatePresence>

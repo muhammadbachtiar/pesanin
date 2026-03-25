@@ -56,7 +56,9 @@ export async function createOrder(
 
 export async function getOrdersByTenant(
     tenantId: string,
-    statuses?: OrderStatus[]
+    statuses?: OrderStatus[],
+    dateFrom?: string,
+    dateTo?: string
 ): Promise<Order[]> {
     let query = supabase
         .from("orders")
@@ -65,7 +67,26 @@ export async function getOrdersByTenant(
         .order("created_at", { ascending: false });
 
     if (statuses?.length) query = query.in("order_status", statuses);
+    if (dateFrom) query = query.gte("created_at", dateFrom);
+    if (dateTo) query = query.lte("created_at", dateTo);
     const { data, error } = await query;
+    if (error || !data) return [];
+    return data as Order[];
+}
+
+/** Lightweight query for analytics — no items join, just order rows. */
+export async function getOrdersForAnalytics(
+    tenantId: string,
+    dateFrom: string,
+    dateTo: string
+): Promise<Order[]> {
+    const { data, error } = await supabase
+        .from("orders")
+        .select("id, created_at, order_status, payment_status, order_type, total_amount, subtotal, tax_amount, service_charge_amount, takeaway_fee_amount, created_by_cashier, queue_number, table_number")
+        .eq("tenant_id", tenantId)
+        .gte("created_at", dateFrom)
+        .lte("created_at", dateTo)
+        .order("created_at", { ascending: false });
     if (error || !data) return [];
     return data as Order[];
 }
