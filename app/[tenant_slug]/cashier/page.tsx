@@ -531,11 +531,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         onClose={() => { setNewOrderDrawer(false); setCart([]); setTableNumber(""); setCustomerNotes(""); setOrderType("dine_in"); }}
         styles={{ body: { padding: 0 }, header: { display: "none" } }}
       >
-        {/* Two-column POS layout */}
-        <div className="flex h-full min-h-screen" style={{ fontFamily: "Inter, sans-serif" }}>
+        {/* Two-column POS layout – stacks on narrow screens */}
+        <div className="flex flex-col sm:flex-row h-full" style={{ fontFamily: "Inter, sans-serif", minHeight: "100dvh" }}>
 
           {/* ── LEFT: Product panel ── */}
-          <div className="flex flex-col w-[55%] border-r bg-gray-50">
+          <div className="flex flex-col sm:w-[58%] min-w-0 border-r bg-gray-50" style={{ flex: "1 1 0", minHeight: 0 }}>
             {/* Panel header */}
             <div className="px-4 pt-4 pb-3 bg-white border-b shadow-sm">
               <div className="flex items-center justify-between mb-3">
@@ -573,8 +573,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
               )}
             </div>
 
-            {/* Product grid */}
-            <div className="flex-1 overflow-y-auto p-3 grid grid-cols-2 lg:grid-cols-3 gap-2.5 content-start">
+            {/* Product grid – auto-fill so cards never get too narrow */}
+            <div
+              className="flex-1 overflow-y-auto p-3 content-start"
+              style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))" }}
+            >
               {visibleProducts.length === 0 && (
                 <div className="col-span-full py-16 flex flex-col items-center text-gray-400">
                   <span className="text-4xl mb-2">🍽️</span>
@@ -591,6 +594,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     style={{
                       borderColor: inCart > 0 ? "var(--tenant-primary)" : "#e2e8f0",
                       boxShadow: inCart > 0 ? "0 0 0 2px rgba(99,102,241,.15)" : undefined,
+                      minWidth: 0,
                     }}
                   >
                     {inCart > 0 && (
@@ -601,16 +605,17 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                         {inCart}
                       </span>
                     )}
-                    {p.image_urls[0] ? (
-                      <div className="w-full bg-gray-50 flex items-center justify-center" style={{ height: 90 }}>
-                        <img src={p.image_urls[0]} alt={p.name} className="w-full h-full object-contain p-1" />
+                    {/* Gambar */}
+                    <div className="w-full flex-shrink-0 flex items-center justify-center bg-gray-50" style={{ height: 80 }}>
+                      {p.image_urls[0]
+                        ? <img src={p.image_urls[0]} alt={p.name} className="w-full h-full object-contain p-1" />
+                        : <span className="text-2xl">🍽️</span>}
+                    </div>
+                    <div className="px-2 pt-1.5 pb-2 min-w-0" style={{ flexShrink: 0 }}>
+                      <div style={{ minHeight: "2.6em" }}>
+                        <p className="font-semibold text-xs leading-snug break-words line-clamp-2" title={p.name}>{p.name}</p>
                       </div>
-                    ) : (
-                      <div className="w-full flex items-center justify-center text-3xl" style={{ height: 90, background: "#f8fafc" }}>🍽️</div>
-                    )}
-                    <div className="p-2 flex flex-col flex-1">
-                      <p className="font-semibold text-xs leading-tight line-clamp-2 mb-1">{p.name}</p>
-                      <p className="text-[11px] font-bold mt-auto" style={{ color: "var(--tenant-primary)" }}>
+                      <p className="text-xs font-bold mt-1 w-full" style={{ color: "var(--tenant-primary)", wordBreak: "break-all" }}>
                         Rp {Number(p.base_price).toLocaleString("id-ID")}
                       </p>
                     </div>
@@ -621,7 +626,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           </div>
 
           {/* ── RIGHT: Cart + order details ── */}
-          <div className="flex flex-col w-[45%] bg-white">
+          <div className="flex flex-col sm:w-[42%] min-w-0 bg-white" style={{ flex: "0 0 auto", minHeight: 0 }}>
             {/* Cart header */}
             <div className="px-4 py-3 border-b bg-gray-50 shadow-sm">
               <h2 className="text-base font-bold text-gray-800">Pesanan</h2>

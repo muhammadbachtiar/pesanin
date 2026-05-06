@@ -584,7 +584,7 @@ export default function KioskPage({
               <button
                 className="btn-primary w-full py-4 text-lg rounded-xl"
                 onClick={() => {
-                  if (bl.numbering === "table" && !tableRecord) {
+                  if (bl.numbering === "table" && !tableRecord && orderType !== "takeaway") {
                     setScreen("table_input");
                   } else {
                     setScreen("summary");
@@ -805,12 +805,12 @@ export default function KioskPage({
               🎉
             </motion.div>
             <h2 className="text-3xl font-bold text-white text-center">Terima Kasih!</h2>
-            <div className="bg-white rounded-2xl p-6 text-center w-full max-w-xs">
+            <div className="bg-white rounded-2xl p-6 text-center w-full max-w-xs shadow-xl">
               <p className="text-gray-500 text-sm">Nomor Antrian Anda</p>
               <p className="text-6xl font-black mt-1" style={{ color: "var(--tenant-primary)" }}>
                 #{queueNumber}
               </p>
-              {(tableRecord || tableInputValue) && (
+              {(tableRecord || tableInputValue) && orderType !== "takeaway" && (
                 <>
                   <p className="text-gray-400 text-xs mt-3">Meja</p>
                   <p className="font-bold text-lg">
@@ -819,6 +819,12 @@ export default function KioskPage({
                 </>
               )}
             </div>
+            
+            <p className="text-white text-center text-sm px-4 max-w-sm opacity-90 leading-relaxed">
+              {bl.payment_timing === "postpaid" 
+                ? "Pesanan Anda telah masuk ke dapur. Silakan tunggu hingga pesanan Anda diantarkan atau dipanggil."
+                : "Silakan menuju kasir untuk melakukan pembayaran dengan menyebutkan Nomor Antrian Anda agar pesanan segera diproses."}
+            </p>
             <motion.button
               whileTap={{ scale: 0.95 }}
               onClick={() => {
@@ -843,7 +849,7 @@ export default function KioskPage({
               onClick={() => setActiveProduct(null)}
             />
             <motion.div
-              className="bg-white rounded-t-3xl sm:rounded-2xl w-full max-w-sm flex flex-col overflow-hidden z-10"
+              className="bg-white rounded-t-3xl sm:rounded-2xl w-full max-w-md flex flex-col overflow-hidden z-10"
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
