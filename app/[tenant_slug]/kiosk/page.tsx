@@ -40,6 +40,7 @@ export default function KioskPage({
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
   const [queueNumber, setQueueNumber] = useState<string>("");
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
   const slugRef = useRef<string>("");
 
   useEffect(() => {
@@ -138,54 +139,56 @@ export default function KioskPage({
   const subtotal = cart.reduce((s, c) => s + c.unit_price * c.quantity, 0);
 
   const handleCheckout = async () => {
-    if (!tenant) return;
-    const fc = tenant.finance_config;
-    const tax = Math.round(subtotal * fc.tax_percentage / 100);
-    const svc = Math.round(subtotal * fc.service_charge_percentage / 100);
-    const tkwy = orderType === "takeaway" ? fc.takeaway_fee : 0;
-    const total = subtotal + tax + svc + tkwy;
-    const qn = await generateQueueNumber(tenant.id);
-    setQueueNumber(qn);
+    if (!tenant || isCheckingOut) return;
+    setIsCheckingOut(true);
+    try {
+      const fc = tenant.finance_config;
+      const tax = Math.round(subtotal * fc.tax_percentage / 100);
+      const svc = Math.round(subtotal * fc.service_charge_percentage / 100);
+      const tkwy = orderType === "takeaway" ? fc.takeaway_fee : 0;
+      const total = subtotal + tax + svc + tkwy;
+      const qn = await generateQueueNumber(tenant.id);
+      setQueueNumber(qn);
 
-    const order = await createOrder(
-      {
-        tenant_id: tenant.id,
-        queue_number: qn,
-        table_number: tableRecord?.table_number ?? tableInputValue,
-        table_id: tableRecord?.id,
-        order_type: orderType,
-        subtotal,
-        tax_amount: tax,
-        service_charge_amount: svc,
-        takeaway_fee_amount: tkwy,
-        total_amount: total,
-        finance_snapshot: {
-          tax_percentage: fc.tax_percentage,
-          service_charge_percentage: fc.service_charge_percentage,
-          takeaway_fee: fc.takeaway_fee,
+      const order = await createOrder(
+        {
+          tenant_id: tenant.id,
+          queue_number: qn,
+          table_number: orderType !== "takeaway" ? (tableRecord?.table_number ?? tableInputValue) : undefined,
+          table_id: orderType !== "takeaway" ? tableRecord?.id : undefined,
+          order_type: orderType,
+          subtotal,
+          tax_amount: tax,
+          service_charge_amount: svc,
+          takeaway_fee_amount: tkwy,
+          total_amount: total,
+          finance_snapshot: {
+            tax_percentage: fc.tax_percentage,
+            service_charge_percentage: fc.service_charge_percentage,
+            takeaway_fee: fc.takeaway_fee,
+          },
         },
-      },
-      cart.map((c) => ({
-        product_id: c.product.id,
-        product_name_snapshot: c.product.name,
-        base_price_snapshot: c.product.base_price,
-        selected_variants: c.selected_variants,
-        quantity: c.quantity,
-        unit_price: c.unit_price,
-        subtotal: c.unit_price * c.quantity,
-        notes: c.notes || undefined,
-      }))
-    );
+        cart.map((c) => ({
+          product_id: c.product.id,
+          product_name_snapshot: c.product.name,
+          base_price_snapshot: c.product.base_price,
+          selected_variants: c.selected_variants,
+          quantity: c.quantity,
+          unit_price: c.unit_price,
+          subtotal: c.unit_price * c.quantity,
+          notes: c.notes || undefined,
+        }))
+      );
 
-    if (order) {
-      setCreatedOrderId(order.id);
-      sessionStorage.removeItem(`cart:${slugRef.current}`);
-      saveCart([]);
-      if (tenant.business_logic.payment_mode === "gateway") {
-        setScreen("payment");
-      } else {
-        setScreen("payment");
+      if (order) {
+        setCreatedOrderId(order.id);
+        sessionStorage.removeItem(`cart:${slugRef.current}`);
+        saveCart([]);
+        // Kasir yang akan mengkonfirmasi metode pembayaran pelanggan
+        setScreen("success");
       }
+    } finally {
+      setIsCheckingOut(false);
     }
   };
 
@@ -607,8 +610,11 @@ export default function KioskPage({
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
           >
-            <h2 className="text-2xl font-bold">Nomor Meja Anda?</h2>
-            <p className="text-gray-500">Lihat nomor meja yang tertera di meja Anda</p>
+            <div className="text-5xl">🪑</div>
+            <div className="text-center">
+              <h2 className="text-2xl font-bold mb-2">Di meja berapa Anda duduk?</h2>
+              <p className="text-gray-500 text-sm">Ambil nomor meja Anda, Masukkan nomor yang tertera</p>
+            </div>
             <input
               type="text"
               value={tableInputValue}
@@ -622,7 +628,7 @@ export default function KioskPage({
               onClick={() => setScreen("summary")}
               disabled={!tableInputValue}
             >
-              Konfirmasi
+              Lanjutkan
             </button>
           </motion.div>
         )}
@@ -714,10 +720,11 @@ export default function KioskPage({
                 Edit Pesanan
               </button>
               <button
-                className="btn-primary flex-1 py-4 text-lg rounded-xl"
+                className="btn-primary flex-1 py-4 text-lg rounded-xl disabled:opacity-60 disabled:cursor-not-allowed"
                 onClick={handleCheckout}
+                disabled={isCheckingOut}
               >
-                {bl.payment_timing === "postpaid" ? "Pesan Sekarang" : "Lanjut Bayar"}
+                {isCheckingOut ? "Memproses..." : (bl.payment_timing === "postpaid" ? "Pesan Sekarang" : "Lanjut Bayar")}
               </button>
             </div>
           </motion.div>
@@ -821,9 +828,11 @@ export default function KioskPage({
             </div>
             
             <p className="text-white text-center text-sm px-4 max-w-sm opacity-90 leading-relaxed">
-              {bl.payment_timing === "postpaid" 
-                ? "Pesanan Anda telah masuk ke dapur. Silakan tunggu hingga pesanan Anda diantarkan atau dipanggil."
-                : "Silakan menuju kasir untuk melakukan pembayaran dengan menyebutkan Nomor Antrian Anda agar pesanan segera diproses."}
+              {bl.payment_timing === "postpaid"
+                ? "Pesanan Anda telah masuk dan sedang kami siapkan. Silakan duduk dan kami akan menghubungi Anda saat pesanan siap."
+                : (orderType === "dine_in" && (tableRecord || tableInputValue)
+                  ? "Silakan tunjukkan nomor antrian ini kepada kasir untuk menyelesaikan pembayaran."
+                  : "Silakan tunjukkan nomor antrian ini kepada kasir untuk menyelesaikan pembayaran Anda.")}
             </p>
             <motion.button
               whileTap={{ scale: 0.95 }}

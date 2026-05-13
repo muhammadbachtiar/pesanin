@@ -34,6 +34,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [voidForm] = Form.useForm();
   const [payForm] = Form.useForm();
+  const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
 
   const refreshOrders = useCallback(async (tenantId: string) => {
     const startOfToday = new Date();
@@ -99,30 +100,51 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   );
 
   const handleVoid = async (values: { reason: string }) => {
-    if (!profile) return;
-    await voidOrder(voidModal.orderId, values.reason, profile.id);
-    setVoidModal({ open: false, orderId: "" });
-    voidForm.resetFields();
-    if (tenant) refreshOrders(tenant.id);
+    if (!profile || submitting["void"]) return;
+    setSubmitting((s) => ({ ...s, void: true }));
+    try {
+      await voidOrder(voidModal.orderId, values.reason, profile.id);
+      setVoidModal({ open: false, orderId: "" });
+      voidForm.resetFields();
+      if (tenant) refreshOrders(tenant.id);
+    } finally {
+      setSubmitting((s) => ({ ...s, void: false }));
+    }
   };
 
   const handlePay = async (values: { method: PaymentMethodType }) => {
-    if (!profile) return;
-    await markOrderPaid(payModal.orderId, values.method, profile.id);
-    setPayModal({ open: false, orderId: "" });
-    payForm.resetFields();
-    if (tenant) refreshOrders(tenant.id);
+    if (!profile || submitting["pay"]) return;
+    setSubmitting((s) => ({ ...s, pay: true }));
+    try {
+      await markOrderPaid(payModal.orderId, values.method, profile.id);
+      setPayModal({ open: false, orderId: "" });
+      payForm.resetFields();
+      if (tenant) refreshOrders(tenant.id);
+    } finally {
+      setSubmitting((s) => ({ ...s, pay: false }));
+    }
   };
 
   const handleApprove = async (orderId: string) => {
-    if (!profile) return;
-    await approveOrder(orderId, profile.id);
-    if (tenant) refreshOrders(tenant.id);
+    if (!profile || submitting[`approve_${orderId}`]) return;
+    setSubmitting((s) => ({ ...s, [`approve_${orderId}`]: true }));
+    try {
+      await approveOrder(orderId, profile.id);
+      if (tenant) refreshOrders(tenant.id);
+    } finally {
+      setSubmitting((s) => ({ ...s, [`approve_${orderId}`]: false }));
+    }
   };
 
   const handleReadyToComplete = async (orderId: string) => {
-    await updateOrderStatus(orderId, "completed");
-    if (tenant) refreshOrders(tenant.id);
+    if (submitting[`complete_${orderId}`]) return;
+    setSubmitting((s) => ({ ...s, [`complete_${orderId}`]: true }));
+    try {
+      await updateOrderStatus(orderId, "completed");
+      if (tenant) refreshOrders(tenant.id);
+    } finally {
+      setSubmitting((s) => ({ ...s, [`complete_${orderId}`]: false }));
+    }
   };
 
   // ──────────────────────────────── POS Cart helpers ────────────────────────────────
@@ -166,45 +188,50 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const cartTotal = cartSubtotal + cartTax + cartSvc + cartTkwy;
 
   const handleCreateCashierOrder = async () => {
-    if (!tenant || !profile || cart.length === 0) return;
-    const qn = await generateQueueNumber(tenant.id);
-    await createOrder(
-      {
-        tenant_id: tenant.id,
-        queue_number: qn,
-        table_number: tableNumber || undefined,
-        order_type: orderType,
-        subtotal: cartSubtotal,
-        tax_amount: cartTax,
-        service_charge_amount: cartSvc,
-        takeaway_fee_amount: cartTkwy,
-        total_amount: cartTotal,
-        customer_notes: customerNotes || undefined,
-        created_by_cashier: true,
-        cashier_profile_id: profile.id,
-        finance_snapshot: {
-          tax_percentage: fc?.tax_percentage ?? 0,
-          service_charge_percentage: fc?.service_charge_percentage ?? 0,
-          takeaway_fee: fc?.takeaway_fee ?? 0,
+    if (!tenant || !profile || cart.length === 0 || submitting["createOrder"]) return;
+    setSubmitting((s) => ({ ...s, createOrder: true }));
+    try {
+      const qn = await generateQueueNumber(tenant.id);
+      await createOrder(
+        {
+          tenant_id: tenant.id,
+          queue_number: qn,
+          table_number: tableNumber || undefined,
+          order_type: orderType,
+          subtotal: cartSubtotal,
+          tax_amount: cartTax,
+          service_charge_amount: cartSvc,
+          takeaway_fee_amount: cartTkwy,
+          total_amount: cartTotal,
+          customer_notes: customerNotes || undefined,
+          created_by_cashier: true,
+          cashier_profile_id: profile.id,
+          finance_snapshot: {
+            tax_percentage: fc?.tax_percentage ?? 0,
+            service_charge_percentage: fc?.service_charge_percentage ?? 0,
+            takeaway_fee: fc?.takeaway_fee ?? 0,
+          },
         },
-      },
-      cart.map((c) => ({
-        product_id: c.product.id,
-        product_name_snapshot: c.product.name,
-        base_price_snapshot: c.product.base_price,
-        selected_variants: c.selected_variants,
-        quantity: c.quantity,
-        unit_price: c.unit_price,
-        subtotal: c.unit_price * c.quantity,
-        notes: c.notes || undefined,
-      }))
-    );
-    setCart([]);
-    setTableNumber("");
-    setCustomerNotes("");
-    setOrderType("dine_in");
-    setNewOrderDrawer(false);
-    if (tenant) refreshOrders(tenant.id);
+        cart.map((c) => ({
+          product_id: c.product.id,
+          product_name_snapshot: c.product.name,
+          base_price_snapshot: c.product.base_price,
+          selected_variants: c.selected_variants,
+          quantity: c.quantity,
+          unit_price: c.unit_price,
+          subtotal: c.unit_price * c.quantity,
+          notes: c.notes || undefined,
+        }))
+      );
+      setCart([]);
+      setTableNumber("");
+      setCustomerNotes("");
+      setOrderType("dine_in");
+      setNewOrderDrawer(false);
+      if (tenant) refreshOrders(tenant.id);
+    } finally {
+      setSubmitting((s) => ({ ...s, createOrder: false }));
+    }
   };
 
   // ──────────────────────────── Filtered product list ───────────────────────────────
@@ -300,6 +327,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
             r.verification_status === "unverified" && r.order_status === "pending" && (
             <Button
               size="small"
+              loading={submitting[`approve_${r.id}`]}
               style={{ background: "#22c55e", color: "#fff", border: "none" }}
               onClick={() => Modal.confirm({
                 title: "Terima pesanan ini? Pesanan akan diteruskan ke dapur",
@@ -312,6 +340,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           {r.order_status === "ready" && (
             <Button
               size="small"
+              loading={submitting[`complete_${r.id}`]}
               style={{ background: "#3b82f6", color: "#fff", border: "none" }}
               onClick={() => Modal.confirm({
                 title: "Tandai pesanan sudah diambil?",
@@ -491,7 +520,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         onCancel={() => setVoidModal({ open: false, orderId: "" })}
         onOk={() => voidForm.submit()}
         okText="Void"
-        okButtonProps={{ danger: true }}
+        okButtonProps={{ danger: true, loading: submitting["void"] }}
       >
         <Form form={voidForm} onFinish={handleVoid} layout="vertical">
           <Form.Item name="reason" label="Alasan pembatalan" rules={[{ required: true }]}>
@@ -507,6 +536,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         onCancel={() => setPayModal({ open: false, orderId: "" })}
         onOk={() => payForm.submit()}
         okText="Konfirmasi Lunas"
+        okButtonProps={{ loading: submitting["pay"] }}
       >
         <Form form={payForm} onFinish={handlePay} layout="vertical">
           <Form.Item name="method" label="Metode Pembayaran" rules={[{ required: true }]}>
@@ -771,11 +801,15 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
               )}
               <button
                 onClick={handleCreateCashierOrder}
-                disabled={cart.length === 0}
+                disabled={cart.length === 0 || submitting["createOrder"]}
                 className="w-full py-3.5 rounded-xl font-bold text-white text-base transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{ background: cart.length > 0 ? "var(--tenant-primary)" : "#94a3b8" }}
+                style={{ background: (cart.length > 0 && !submitting["createOrder"]) ? "var(--tenant-primary)" : "#94a3b8" }}
               >
-                {cart.length === 0 ? "Pilih Menu Terlebih Dahulu" : `Buat Pesanan · Rp ${cartTotal.toLocaleString("id-ID")}`}
+                {submitting["createOrder"]
+                  ? "Memproses Pesanan..."
+                  : cart.length === 0
+                  ? "Pilih Menu Terlebih Dahulu"
+                  : `Buat Pesanan · Rp ${cartTotal.toLocaleString("id-ID")}`}
               </button>
             </div>
           </div>
