@@ -115,16 +115,45 @@ export async function updateOrderStatus(
 export async function markOrderPaid(
     orderId: string,
     method: PaymentMethodType,
-    verifiedByProfileId: string
+    verifiedByProfileId: string,
+    targetOrderStatus?: OrderStatus
 ): Promise<boolean> {
+    const { data: existing } = await supabase
+        .from("orders")
+        .select("order_status")
+        .eq("id", orderId)
+        .single();
+
+    const newStatus = targetOrderStatus
+        ? targetOrderStatus
+        : existing?.order_status === "pending"
+        ? "cooking"
+        : existing?.order_status ?? "cooking";
+
     const { error } = await supabase.from("orders").update({
         payment_status: "paid",
         payment_method: method,
         verification_status: "verified",
         verified_by: verifiedByProfileId,
         verified_at: new Date().toISOString(),
-        order_status: "cooking",
+        order_status: newStatus,
     }).eq("id", orderId);
+    return !error;
+}
+
+export async function markOrderServed(
+    orderId: string,
+    currentNotes?: string | null
+): Promise<boolean> {
+    const newNotes = currentNotes
+        ? currentNotes.includes("[SERVED]")
+            ? currentNotes
+            : `${currentNotes} [SERVED]`
+        : "[SERVED]";
+    const { error } = await supabase
+        .from("orders")
+        .update({ customer_notes: newNotes })
+        .eq("id", orderId);
     return !error;
 }
 

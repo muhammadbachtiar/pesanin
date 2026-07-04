@@ -176,12 +176,12 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
                   )}
                 </div>
 
-                {order.customer_notes && (
+                {order.customer_notes && order.customer_notes.replace(/\[SERVED\]/g, "").trim() && (
                   <p
                     className="text-xs px-2 py-1 rounded"
                     style={{ background: "#1e1b4b", color: "#a5b4fc" }}
                   >
-                    🗒️ {order.customer_notes}
+                    🗒️ {order.customer_notes.replace(/\[SERVED\]/g, "").trim()}
                   </p>
                 )}
 

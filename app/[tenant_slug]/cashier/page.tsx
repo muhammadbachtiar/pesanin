@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Table, Tag, Button, Modal, Form, Input, Select, Badge, Tabs, Switch, InputNumber, Drawer } from "antd";
-import { getOrdersByTenant, getOrderById, markOrderPaid, approveOrder, voidOrder, updateOrderStatus, createOrder, generateQueueNumber } from "@/services/orderService";
+import { getOrdersByTenant, getOrderById, markOrderPaid, markOrderServed, approveOrder, voidOrder, updateOrderStatus, createOrder, generateQueueNumber } from "@/services/orderService";
 import { getTenantBySlug } from "@/services/tenantService";
 import { getAllProductsByTenant, getCategoriesWithProducts } from "@/services/productService";
 import { getCurrentProfile } from "@/services/authService";
@@ -23,7 +23,10 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [voidModal, setVoidModal] = useState<{ open: boolean; orderId: string }>({ open: false, orderId: "" });
-  const [payModal, setPayModal] = useState<{ open: boolean; orderId: string }>({ open: false, orderId: "" });
+  const [payModal, setPayModal] = useState<{ open: boolean; order: Order | null; autoComplete?: boolean }>({ open: false, order: null, autoComplete: false });
+  const [payMethod, setPayMethod] = useState<PaymentMethodType>("cash");
+  const [cashReceived, setCashReceived] = useState<number | null>(null);
+  const [printOnSubmit, setPrintOnSubmit] = useState<boolean>(true);
   const [newOrderDrawer, setNewOrderDrawer] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [pendingBadge, setPendingBadge] = useState(0);
@@ -33,7 +36,6 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [productSearch, setProductSearch] = useState("");
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [voidForm] = Form.useForm();
-  const [payForm] = Form.useForm();
   const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
 
   const refreshOrders = useCallback(async (tenantId: string) => {
@@ -73,7 +75,6 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   useRealtimeOrders(
     tenant?.id ?? "",
     async (newOrder) => {
-      // Realtime payload doesn't include joined items — fetch full order
       const full = await getOrderById(newOrder.id);
       const order = full ?? newOrder;
       setOrders((prev) => [order, ...prev.filter((o) => o.id !== order.id)]);
@@ -86,7 +87,6 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       const full = await getOrderById(updated.id);
       const order = full ?? updated;
       setOrders((prev) => prev.map((o) => (o.id === order.id ? order : o)));
-      // Recalculate pending badge from current orders state
       setPendingBadge((n) => {
         const wasPending = updated.order_status === "pending";
         const isNowPending = order.order_status === "pending";
@@ -112,17 +112,48 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     }
   };
 
-  const handlePay = async (values: { method: PaymentMethodType }) => {
-    if (!profile || submitting["pay"]) return;
+  const handlePayConfirm = async () => {
+    if (!profile || !payModal.order || submitting["pay"]) return;
+    const order = payModal.order;
+    if (payMethod === "cash" && cashReceived !== null && cashReceived < order.total_amount) {
+      Modal.error({
+        title: "Uang Diterima Kurang",
+        content: "Nominal uang tunai yang dimasukkan lebih kecil dari total tagihan.",
+      });
+      return;
+    }
     setSubmitting((s) => ({ ...s, pay: true }));
     try {
-      await markOrderPaid(payModal.orderId, values.method, profile.id);
-      setPayModal({ open: false, orderId: "" });
-      payForm.resetFields();
+      const targetStatus = payModal.autoComplete ? "completed" : undefined;
+      await markOrderPaid(order.id, payMethod, profile.id, targetStatus);
+      
+      if (printOnSubmit) {
+        handlePrintReceipt();
+      }
+
+      setPayModal({ open: false, order: null, autoComplete: false });
+      setCashReceived(null);
       if (tenant) refreshOrders(tenant.id);
     } finally {
       setSubmitting((s) => ({ ...s, pay: false }));
     }
+  };
+
+  const handleServe = async (orderId: string, currentNotes?: string | null) => {
+    if (submitting[`serve_${orderId}`]) return;
+    setSubmitting((s) => ({ ...s, [`serve_${orderId}`]: true }));
+    try {
+      await markOrderServed(orderId, currentNotes);
+      if (tenant) refreshOrders(tenant.id);
+    } finally {
+      setSubmitting((s) => ({ ...s, [`serve_${orderId}`]: false }));
+    }
+  };
+
+  const handlePrintReceipt = () => {
+    setTimeout(() => {
+      window.print();
+    }, 120);
   };
 
   const handleApprove = async (orderId: string) => {
@@ -271,30 +302,41 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     },
     {
       title: "Item Pesanan",
-      render: (_: unknown, r: Order) => (
-        <div className="text-sm space-y-1">
-          {r.items && r.items.length > 0 ? r.items.map((it, i) => (
-            <div key={i} className="flex items-start gap-1.5">
-              <span className="font-bold text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 flex-shrink-0">
-                ×{it.quantity}
-              </span>
-              <div>
-                <span className="font-medium">{it.product_name_snapshot}</span>
-                {it.notes && (
-                  <span className="block text-xs text-amber-600">📝 {it.notes}</span>
-                )}
+      render: (_: unknown, r: Order) => {
+        const cleanNotes = r.customer_notes?.replace(/\[SERVED\]/g, "").trim();
+        const isServed = r.customer_notes?.includes("[SERVED]");
+        return (
+          <div className="text-sm space-y-1">
+            {r.items && r.items.length > 0 ? (
+              r.items.map((it, i) => (
+                <div key={i} className="flex items-start gap-1.5">
+                  <span className="font-bold text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 flex-shrink-0">
+                    ×{it.quantity}
+                  </span>
+                  <div>
+                    <span className="font-medium">{it.product_name_snapshot}</span>
+                    {it.notes && (
+                      <span className="block text-xs text-amber-600">📝 {it.notes}</span>
+                    )}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <span className="text-gray-400 text-xs">—</span>
+            )}
+            {cleanNotes && (
+              <div className="mt-1 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded">
+                🗒️ {cleanNotes}
               </div>
-            </div>
-          )) : (
-            <span className="text-gray-400 text-xs">—</span>
-          )}
-          {r.customer_notes && (
-            <div className="mt-1 text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded">
-              🗒️ {r.customer_notes}
-            </div>
-          )}
-        </div>
-      ),
+            )}
+            {r.order_type === "dine_in" && isServed && (
+              <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
+                🍽️ SUDAH DISAJIKAN
+              </span>
+            )}
+          </div>
+        );
+      },
     },
     {
       title: "Status",
@@ -315,48 +357,148 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     },
     {
       title: "Aksi",
-      width: 170,
-      render: (_: unknown, r: Order) => (
-        <div className="flex flex-wrap gap-1">
-          {r.payment_status === "unpaid" && r.order_status !== "cancelled" && (
-            <Button type="primary" size="small" onClick={() => setPayModal({ open: true, orderId: r.id })}>
-              Tandai Lunas
-            </Button>
-          )}
-          {bl?.payment_timing === "postpaid" && bl.require_cashier_verification &&
-            r.verification_status === "unverified" && r.order_status === "pending" && (
-            <Button
-              size="small"
-              loading={submitting[`approve_${r.id}`]}
-              style={{ background: "#22c55e", color: "#fff", border: "none" }}
-              onClick={() => Modal.confirm({
-                title: "Terima pesanan ini? Pesanan akan diteruskan ke dapur",
-                onOk: () => handleApprove(r.id),
-              })}
-            >
-              Terima
-            </Button>
-          )}
-          {r.order_status === "ready" && (
-            <Button
-              size="small"
-              loading={submitting[`complete_${r.id}`]}
-              style={{ background: "#3b82f6", color: "#fff", border: "none" }}
-              onClick={() => Modal.confirm({
-                title: "Tandai pesanan sudah diambil?",
-                onOk: () => handleReadyToComplete(r.id),
-              })}
-            >
-              ✅ Selesai
-            </Button>
-          )}
-          {r.order_status !== "cancelled" && r.order_status !== "completed" && (
-            <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
-              Void
-            </Button>
-          )}
-        </div>
-      ),
+      width: 220,
+      render: (_: unknown, r: Order) => {
+        const isServed = r.customer_notes?.includes("[SERVED]");
+        const isDineIn = r.order_type === "dine_in";
+        const isUnpaid = r.payment_status === "unpaid";
+        const isPaid = r.payment_status === "paid";
+
+        return (
+          <div className="flex flex-wrap gap-1.5">
+            {/* TAB MENUNGGU (pending) */}
+            {r.order_status === "pending" && (
+              <>
+                {bl?.payment_timing === "postpaid" &&
+                  bl.require_cashier_verification &&
+                  r.verification_status === "unverified" && (
+                    <Button
+                      size="small"
+                      loading={submitting[`approve_${r.id}`]}
+                      style={{ background: "#22c55e", color: "#fff", border: "none" }}
+                      onClick={() =>
+                        Modal.confirm({
+                          title: "Terima pesanan ini? Pesanan akan diteruskan ke dapur",
+                          onOk: () => handleApprove(r.id),
+                        })
+                      }
+                    >
+                      Terima
+                    </Button>
+                  )}
+                {isUnpaid && (
+                  <Button
+                    type="primary"
+                    size="small"
+                    onClick={() => {
+                      setPayModal({ open: true, order: r, autoComplete: false });
+                      setPayMethod(r.payment_method || "cash");
+                      setCashReceived(r.total_amount);
+                    }}
+                  >
+                    Tandai Lunas
+                  </Button>
+                )}
+              </>
+            )}
+
+            {/* TAB SEDANG DIMASAK (cooking) */}
+            {r.order_status === "cooking" && (
+              <>
+                {isUnpaid && (
+                  <Button
+                    type="primary"
+                    size="small"
+                    onClick={() => {
+                      setPayModal({ open: true, order: r, autoComplete: false });
+                      setPayMethod(r.payment_method || "cash");
+                      setCashReceived(r.total_amount);
+                    }}
+                  >
+                    Tandai Lunas
+                  </Button>
+                )}
+              </>
+            )}
+
+            {/* TAB SIAP AMBIL / SAJIKAN (ready) */}
+            {r.order_status === "ready" && (
+              <>
+                {/* For Dine-in: step 1 is Sajikan (if not served yet) */}
+                {isDineIn && !isServed && (
+                  <Button
+                    size="small"
+                    loading={submitting[`serve_${r.id}`]}
+                    style={{ background: "#f59e0b", color: "#fff", border: "none" }}
+                    onClick={() => handleServe(r.id, r.customer_notes)}
+                  >
+                    🍽️ Sajikan
+                  </Button>
+                )}
+
+                {/* If Dine-in served OR Takeaway: can now be completed */}
+                {(isServed || !isDineIn) && (
+                  <>
+                    {isPaid ? (
+                      <Button
+                        size="small"
+                        loading={submitting[`complete_${r.id}`]}
+                        style={{ background: "#3b82f6", color: "#fff", border: "none" }}
+                        onClick={() =>
+                          Modal.confirm({
+                            title: isDineIn
+                              ? "Pesanan sudah selesai?"
+                              : "Tandai pesanan sudah diambil?",
+                            onOk: () => handleReadyToComplete(r.id),
+                          })
+                        }
+                      >
+                        ✅ Selesai
+                      </Button>
+                    ) : (
+                      /* 1 Button gabungan untuk Tandai Lunas & Selesai */
+                      <Button
+                        type="primary"
+                        size="small"
+                        style={{ background: "#10b981", borderColor: "#10b981", color: "#fff" }}
+                        onClick={() => {
+                          setPayModal({ open: true, order: r, autoComplete: true });
+                          setPayMethod(r.payment_method || "cash");
+                          setCashReceived(r.total_amount);
+                        }}
+                      >
+                        💳 Tandai Lunas & Selesai
+                      </Button>
+                    )}
+                  </>
+                )}
+
+                {/* Secondary Tandai Lunas if unpaid and not served yet */}
+                {isDineIn && !isServed && isUnpaid && (
+                  <Button
+                    type="default"
+                    size="small"
+                    onClick={() => {
+                      setPayModal({ open: true, order: r, autoComplete: false });
+                      setPayMethod(r.payment_method || "cash");
+                      setCashReceived(r.total_amount);
+                    }}
+                  >
+                    Tandai Lunas
+                  </Button>
+                )}
+              </>
+            )}
+
+            {/* VOID BUTTON */}
+            {r.order_status !== "cancelled" && r.order_status !== "completed" && (
+              <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
+                Void
+              </Button>
+            )}
+          </div>
+        );
+      },
     },
   ];
 
@@ -529,28 +671,382 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         </Form>
       </Modal>
 
-      {/* ─── Pay Modal ─── */}
+      {/* ─── POS Pay & Receipt Modal ─── */}
       <Modal
-        title="Tandai Lunas"
         open={payModal.open}
-        onCancel={() => setPayModal({ open: false, orderId: "" })}
-        onOk={() => payForm.submit()}
-        okText="Konfirmasi Lunas"
-        okButtonProps={{ loading: submitting["pay"] }}
+        onCancel={() => { setPayModal({ open: false, order: null }); setCashReceived(null); }}
+        footer={null}
+        width={600}
+        centered
+        destroyOnClose
+        title={
+          <div className="flex items-center gap-3 pb-2 border-b">
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl font-bold flex-shrink-0">
+              💳
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-gray-800 leading-tight">
+                {payModal.autoComplete ? "Tandai Lunas & Selesaikan Pesanan" : "Tandai Lunas"}
+              </h3>
+              <p className="text-xs text-gray-400 font-normal mt-0.5">
+                {payModal.order ? `No. Antrian #${payModal.order.queue_number}` : ""}
+                {payModal.order?.table_number ? ` · Meja ${payModal.order.table_number}` : ""}
+                {payModal.order?.order_type ? ` · ${payModal.order.order_type === "takeaway" ? "Takeaway" : "Dine-in"}` : ""}
+              </p>
+            </div>
+          </div>
+        }
       >
-        <Form form={payForm} onFinish={handlePay} layout="vertical">
-          <Form.Item name="method" label="Metode Pembayaran" rules={[{ required: true }]}>
-            <Select placeholder="Pilih metode">
-              {tenant.manual_payment_channels.map((ch) => (
-                <Select.Option key={ch.id} value={ch.type}>{ch.label}</Select.Option>
-              ))}
-              {bl?.payment_mode === "gateway" && (
-                <Select.Option value="gateway">Gateway (Midtrans/Xendit)</Select.Option>
-              )}
-            </Select>
-          </Form.Item>
-        </Form>
+        {payModal.order && (
+          <div className="space-y-4 pt-2">
+            {/* ── 1. Detail Belanja (Struk Preview / Itemized List) ── */}
+            <div className="bg-gray-50 rounded-xl p-3.5 border space-y-2">
+              <div className="flex justify-between items-center">
+                <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Rincian Items</p>
+                <span className="text-[11px] text-gray-400">{payModal.order.items?.length ?? 0} Jenis Menu</span>
+              </div>
+              <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1 divide-y divide-gray-100 text-xs">
+                {payModal.order.items?.map((it, idx) => (
+                  <div key={idx} className="pt-1.5 first:pt-0 flex justify-between items-start">
+                    <div>
+                      <p className="font-semibold text-gray-800">
+                        <span className="text-indigo-600 font-bold mr-1">×{it.quantity}</span>
+                        {it.product_name_snapshot}
+                      </p>
+                      {it.selected_variants?.map((v, vi) => (
+                        <p key={vi} className="text-[11px] text-gray-400">↳ {v.group}: {v.option}</p>
+                      ))}
+                      {it.notes && <p className="text-[11px] text-amber-600">📝 {it.notes}</p>}
+                    </div>
+                    <p className="font-semibold text-gray-700">Rp {it.subtotal.toLocaleString("id-ID")}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Finance Breakdown */}
+              <div className="border-t pt-2 space-y-1 text-xs text-gray-500">
+                <div className="flex justify-between">
+                  <span>Subtotal</span>
+                  <span>Rp {payModal.order.subtotal.toLocaleString("id-ID")}</span>
+                </div>
+                {payModal.order.tax_amount > 0 && (
+                  <div className="flex justify-between">
+                    <span>Pajak ({fc?.tax_percentage}%)</span>
+                    <span>Rp {payModal.order.tax_amount.toLocaleString("id-ID")}</span>
+                  </div>
+                )}
+                {payModal.order.service_charge_amount > 0 && (
+                  <div className="flex justify-between">
+                    <span>Service Charge ({fc?.service_charge_percentage}%)</span>
+                    <span>Rp {payModal.order.service_charge_amount.toLocaleString("id-ID")}</span>
+                  </div>
+                )}
+                {payModal.order.takeaway_fee_amount > 0 && (
+                  <div className="flex justify-between">
+                    <span>Biaya Takeaway</span>
+                    <span>Rp {payModal.order.takeaway_fee_amount.toLocaleString("id-ID")}</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center pt-2 border-t font-extrabold text-base text-gray-900">
+                  <span>TOTAL BELANJA</span>
+                  <span style={{ color: "var(--tenant-primary)" }}>
+                    Rp {payModal.order.total_amount.toLocaleString("id-ID")}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* ── 2. Pilih Metode Pembayaran ── */}
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">
+                Pilih Metode Pembayaran
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { key: "cash", label: "Tunai / Cash", icon: "💵" },
+                  { key: "qris_static", label: "QRIS", icon: "📱" },
+                  { key: "bank_transfer", label: "Transfer Bank", icon: "🏦" },
+                  ...(bl?.payment_mode === "gateway" ? [{ key: "gateway", label: "Gateway", icon: "💳" }] : []),
+                ].map((m) => (
+                  <button
+                    key={m.key}
+                    type="button"
+                    onClick={() => {
+                      setPayMethod(m.key as PaymentMethodType);
+                      if (m.key === "cash" && cashReceived === null) {
+                        setCashReceived(payModal.order?.total_amount ?? 0);
+                      }
+                    }}
+                    className={`p-2.5 rounded-xl border text-center transition-all flex flex-col items-center gap-1 ${
+                      payMethod === m.key
+                        ? "border-indigo-600 bg-indigo-50/50 text-indigo-700 shadow-sm ring-2 ring-indigo-500/20"
+                        : "border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
+                    }`}
+                  >
+                    <span className="text-xl">{m.icon}</span>
+                    <span className="text-xs font-bold">{m.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* ── 3. Kalkulator Uang Tunai (jika Tunai/Cash) ── */}
+            {payMethod === "cash" && (
+              <div className="bg-amber-50/50 border border-amber-200/60 rounded-xl p-3.5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-amber-900 flex items-center gap-1">
+                    💵 Uang Diterima (Nominal Bayar)
+                  </label>
+                  <span className="text-[11px] text-amber-700 font-medium">Input atau Pilih Uang Pas</span>
+                </div>
+
+                <InputNumber
+                  className="w-full text-lg font-bold"
+                  size="large"
+                  value={cashReceived}
+                  onChange={(v) => setCashReceived(v)}
+                  addonBefore={<span className="font-bold text-gray-600">Rp</span>}
+                  formatter={(val) => `${val}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
+                  parser={(val) => Number(val?.replace(/\./g, "") || 0)}
+                  placeholder="Masukkan nominal bayar..."
+                />
+
+                {/* Quick Nominal Shortcuts */}
+                {payModal.order && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { label: "Uang Pas", val: payModal.order.total_amount },
+                      { label: "20.000", val: 20000 },
+                      { label: "50.000", val: 50000 },
+                      { label: "100.000", val: 100000 },
+                      { label: "200.000", val: 200000 },
+                    ]
+                      .filter((p) => p.val >= payModal.order!.total_amount || p.label === "Uang Pas")
+                      .map((p, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setCashReceived(p.val)}
+                          className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all ${
+                            cashReceived === p.val
+                              ? "bg-amber-600 text-white border-amber-600 shadow-sm"
+                              : "bg-white text-amber-900 border-amber-200 hover:bg-amber-100/50"
+                          }`}
+                        >
+                          {p.label === "Uang Pas" ? "✨ Uang Pas" : `Rp ${p.val.toLocaleString("id-ID")}`}
+                        </button>
+                      ))}
+                  </div>
+                )}
+
+                {/* Result Kembalian / Uang Kurang */}
+                {cashReceived !== null && payModal.order && (
+                  <div className="pt-1">
+                    {cashReceived >= payModal.order.total_amount ? (
+                      <div className="bg-emerald-500 text-white rounded-xl p-3 flex items-center justify-between shadow-sm">
+                        <span className="text-xs font-bold uppercase tracking-wider opacity-90">KEMBALIAN</span>
+                        <span className="text-xl font-black">
+                          Rp {(cashReceived - payModal.order.total_amount).toLocaleString("id-ID")}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="bg-rose-500 text-white rounded-xl p-2.5 flex items-center justify-between shadow-sm">
+                        <span className="text-xs font-bold uppercase tracking-wider opacity-90">⚠️ UANG KURANG</span>
+                        <span className="text-base font-extrabold">
+                          Rp {(payModal.order.total_amount - cashReceived).toLocaleString("id-ID")}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── 4. Opsi Print & Submit Buttons ── */}
+            <div className="pt-2 border-t flex flex-col sm:flex-row items-center justify-between gap-3">
+              <label className="flex items-center gap-2 text-xs font-medium text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={printOnSubmit}
+                  onChange={(e) => setPrintOnSubmit(e.target.checked)}
+                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+                />
+                Cetak Struk Belanja setelah pelunasan 🖨️
+              </label>
+
+              <div className="flex gap-2 w-full sm:w-auto">
+                <Button
+                  onClick={() => { setPayModal({ open: false, order: null }); setCashReceived(null); }}
+                  className="flex-1 sm:flex-none"
+                >
+                  Batal
+                </Button>
+                <Button
+                  type="default"
+                  icon={<span>🖨️</span>}
+                  onClick={handlePrintReceipt}
+                  className="flex-1 sm:flex-none"
+                >
+                  Struk Only
+                </Button>
+                <Button
+                  type="primary"
+                  loading={submitting["pay"]}
+                  disabled={payMethod === "cash" && (cashReceived === null || cashReceived < payModal.order.total_amount)}
+                  onClick={handlePayConfirm}
+                  className="flex-1 sm:flex-none font-bold"
+                  style={{ background: payModal.autoComplete ? "#10b981" : undefined, borderColor: payModal.autoComplete ? "#10b981" : undefined }}
+                >
+                  {payModal.autoComplete ? "Konfirmasi Lunas & Selesai 🚀" : "Konfirmasi Lunas ✅"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </Modal>
+
+      {/* ─── PRINTABLE THERMAL RECEIPT AREA ─── */}
+      {payModal.order && tenant && (
+        <div id="receipt-print-area" className="hidden print:block font-mono text-black text-xs p-2 max-w-[80mm] mx-auto leading-tight">
+          <div className="text-center mb-2">
+            {tenant.logo_url && tenant.receipt_config?.show_logo && (
+              <img src={tenant.logo_url} alt={tenant.name} className="w-10 h-10 mx-auto mb-1 object-contain" />
+            )}
+            <h2 className="font-bold text-sm uppercase">{tenant.name}</h2>
+            {tenant.receipt_config?.header_text && (
+              <p className="text-[10px] text-gray-600 whitespace-pre-line">{tenant.receipt_config.header_text}</p>
+            )}
+          </div>
+
+          <div className="border-t border-b border-dashed border-black py-1 my-1.5 text-[10px] space-y-0.5">
+            <div className="flex justify-between">
+              <span>No. Antrian:</span>
+              <span className="font-bold">#{payModal.order.queue_number}</span>
+            </div>
+            {payModal.order.table_number && (
+              <div className="flex justify-between">
+                <span>Meja:</span>
+                <span className="font-bold">{payModal.order.table_number}</span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span>Tipe Pesanan:</span>
+              <span className="font-semibold">{payModal.order.order_type === "takeaway" ? "TAKEAWAY" : "DINE-IN"}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Waktu:</span>
+              <span>{new Date(payModal.order.created_at).toLocaleString("id-ID")}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Kasir:</span>
+              <span>{profile?.full_name || "Staff Kasir"}</span>
+            </div>
+          </div>
+
+          {/* Table of items */}
+          <div className="border-b border-dashed border-black pb-1 mb-1 text-[10px]">
+            <div className="grid grid-cols-12 font-bold border-b border-gray-400 pb-0.5 mb-1">
+              <span className="col-span-6">Menu</span>
+              <span className="col-span-2 text-center">Qty</span>
+              <span className="col-span-4 text-right">Total</span>
+            </div>
+            {payModal.order.items?.map((it, idx) => (
+              <div key={idx} className="grid grid-cols-12 py-0.5">
+                <div className="col-span-6 pr-1">
+                  <span className="font-medium">{it.product_name_snapshot}</span>
+                  {it.selected_variants?.map((v, vi) => (
+                    <span key={vi} className="block text-[8px] text-gray-500">↳ {v.group}: {v.option}</span>
+                  ))}
+                  {it.notes && <span className="block text-[8px] text-gray-500">📝 {it.notes}</span>}
+                </div>
+                <span className="col-span-2 text-center">{it.quantity}</span>
+                <span className="col-span-4 text-right font-semibold">Rp {it.subtotal.toLocaleString("id-ID")}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Totals */}
+          <div className="text-[10px] space-y-0.5">
+            <div className="flex justify-between">
+              <span>Subtotal:</span>
+              <span>Rp {payModal.order.subtotal.toLocaleString("id-ID")}</span>
+            </div>
+            {payModal.order.tax_amount > 0 && (
+              <div className="flex justify-between">
+                <span>Pajak:</span>
+                <span>Rp {payModal.order.tax_amount.toLocaleString("id-ID")}</span>
+              </div>
+            )}
+            {payModal.order.service_charge_amount > 0 && (
+              <div className="flex justify-between">
+                <span>Service Charge:</span>
+                <span>Rp {payModal.order.service_charge_amount.toLocaleString("id-ID")}</span>
+              </div>
+            )}
+            {payModal.order.takeaway_fee_amount > 0 && (
+              <div className="flex justify-between">
+                <span>Biaya Takeaway:</span>
+                <span>Rp {payModal.order.takeaway_fee_amount.toLocaleString("id-ID")}</span>
+              </div>
+            )}
+            <div className="flex justify-between font-bold text-xs pt-1 border-t border-black">
+              <span>TOTAL BELANJA:</span>
+              <span>Rp {payModal.order.total_amount.toLocaleString("id-ID")}</span>
+            </div>
+          </div>
+
+          {/* Payment */}
+          <div className="border-t border-dashed border-black mt-1.5 pt-1 text-[10px] space-y-0.5">
+            <div className="flex justify-between">
+              <span>Metode Bayar:</span>
+              <span className="font-bold uppercase">{payMethod === "cash" ? "TUNAI / CASH" : payMethod}</span>
+            </div>
+            {payMethod === "cash" && cashReceived !== null && (
+              <>
+                <div className="flex justify-between">
+                  <span>Uang Diterima:</span>
+                  <span>Rp {cashReceived.toLocaleString("id-ID")}</span>
+                </div>
+                <div className="flex justify-between font-bold">
+                  <span>Kembalian:</span>
+                  <span>Rp {Math.max(0, cashReceived - payModal.order.total_amount).toLocaleString("id-ID")}</span>
+                </div>
+              </>
+            )}
+            <div className="flex justify-between text-black font-bold pt-0.5">
+              <span>Status Pembayaran:</span>
+              <span>LUNAS ✅</span>
+            </div>
+          </div>
+
+          {/* Footer */}
+          {tenant.receipt_config?.footer_text && (
+            <div className="text-center mt-3 pt-1.5 border-t border-dashed border-black text-[9px]">
+              <p>{tenant.receipt_config.footer_text}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Inline Print Style */}
+      <style jsx global>{`
+        @media print {
+          body * {
+            visibility: hidden !important;
+          }
+          #receipt-print-area, #receipt-print-area * {
+            visibility: visible !important;
+          }
+          #receipt-print-area {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            background: white !important;
+            color: black !important;
+          }
+        }
+      `}</style>
 
       {/* ──────────────── POS ORDER DRAWER ──────────────── */}
       <Drawer
