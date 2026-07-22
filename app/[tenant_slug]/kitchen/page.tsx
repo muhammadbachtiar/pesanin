@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { getOrdersByTenant, getOrderById, updateOrderStatus } from "@/services/orderService";
+import { getOrdersByTenant, getOrderById, updateOrderStatus, parseCustomerNotes, buildCustomerNotes, updateOrderCookedItems } from "@/services/orderService";
 import { getTenantBySlug } from "@/services/tenantService";
 import { useRealtimeOrders } from "@/hooks/useRealtime";
 import type { Order, OrderItem, Tenant } from "@/types";
@@ -17,8 +17,18 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("order");
-  const [completedItems, setCompletedItems] = useState<Set<string>>(new Set());
   const [undoQueueState, setUndoQueueState] = useState<Record<string, boolean>>({});
+
+  const completedItems = useMemo(() => {
+    const set = new Set<string>();
+    orders.forEach((order) => {
+      const { cookedItemIds } = parseCustomerNotes(order.customer_notes);
+      cookedItemIds.forEach((id) => {
+        set.add(`${order.id}_${id}`);
+      });
+    });
+    return set;
+  }, [orders]);
   const undoQueueRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
@@ -104,45 +114,85 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
   }, []);
 
   const toggleItemComplete = useCallback(
-    (order: Order, itemKey: string) => {
-      setCompletedItems((prev) => {
-        const next = new Set(prev);
-        const wasDone = next.has(itemKey);
-        if (wasDone) {
-          next.delete(itemKey);
-          undoMark(order.id);
-        } else {
-          next.add(itemKey);
-          if (
-            order.items &&
-            order.items.length > 0 &&
-            order.items.every((it, idx) => {
-              const k = getItemKey(order.id, it, idx);
-              return k === itemKey || next.has(k);
-            })
-          ) {
-            markDone(order.id);
-          }
-        }
-        return next;
-      });
+    async (order: Order, itemKey: string) => {
+      const itemId = itemKey.includes("_") ? itemKey.split("_")[1] : itemKey;
+      if (!itemId) return;
+
+      const { cleanNotes, isServed, cookedItemIds } = parseCustomerNotes(order.customer_notes);
+      const isAlreadyCooked = cookedItemIds.includes(itemId);
+
+      let newCookedItemIds: string[];
+      if (isAlreadyCooked) {
+        newCookedItemIds = cookedItemIds.filter((id) => id !== itemId);
+        undoMark(order.id);
+      } else {
+        newCookedItemIds = [...cookedItemIds, itemId];
+      }
+
+      // 1. OPTIMISTIC UPDATE: Update local React state instantly
+      const newNotes = buildCustomerNotes(cleanNotes, isServed, newCookedItemIds);
+      const previousNotes = order.customer_notes;
+
+      setOrders((prev) =>
+        prev.map((o) => (o.id === order.id ? { ...o, customer_notes: newNotes } : o))
+      );
+
+      const allDoneNow =
+        order.items &&
+        order.items.length > 0 &&
+        order.items.every((it, idx) => {
+          const key = getItemKey(order.id, it, idx);
+          const curItemId = key.includes("_") ? key.split("_")[1] : key;
+          return curItemId === itemId || newCookedItemIds.includes(curItemId);
+        });
+
+      if (allDoneNow && !isAlreadyCooked) {
+        markDone(order.id);
+      }
+
+      // 2. ASYNC BACKGROUND DB CALL with Rollback
+      try {
+        const ok = await updateOrderCookedItems(order.id, previousNotes, newCookedItemIds);
+        if (!ok) throw new Error("Gagal menyimpan ke database");
+      } catch (err) {
+        console.error("Optimistic update failed, rolling back:", err);
+        setOrders((prev) =>
+          prev.map((o) => (o.id === order.id ? { ...o, customer_notes: previousNotes } : o))
+        );
+        undoMark(order.id);
+      }
     },
     [undoMark, markDone]
   );
 
   const completeAllItemsInOrder = useCallback(
-    (order: Order) => {
+    async (order: Order) => {
       if (!order.items) return;
-      setCompletedItems((prev) => {
-        const next = new Set(prev);
-        order.items!.forEach((it, idx) => {
-          next.add(getItemKey(order.id, it, idx));
-        });
-        return next;
-      });
+      const allItemIds = order.items.map((it) => it.id).filter(Boolean) as string[];
+
+      const { cleanNotes, isServed } = parseCustomerNotes(order.customer_notes);
+      const newNotes = buildCustomerNotes(cleanNotes, isServed, allItemIds);
+      const previousNotes = order.customer_notes;
+
+      // Optimistic update
+      setOrders((prev) =>
+        prev.map((o) => (o.id === order.id ? { ...o, customer_notes: newNotes } : o))
+      );
       markDone(order.id);
+
+      // Background DB update
+      try {
+        const ok = await updateOrderCookedItems(order.id, previousNotes, allItemIds);
+        if (!ok) throw new Error("Gagal menyimpan ke database");
+      } catch (err) {
+        console.error("Optimistic complete all failed, rolling back:", err);
+        setOrders((prev) =>
+          prev.map((o) => (o.id === order.id ? { ...o, customer_notes: previousNotes } : o))
+        );
+        undoMark(order.id);
+      }
     },
-    [markDone]
+    [markDone, undoMark]
   );
 
   // Grouping for Mode Menu (Batch Cooking)
@@ -195,27 +245,61 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
   }, [orders, completedItems]);
 
   const completeBatchMenu = useCallback(
-    (groupItems: { order: Order; itemKey: string }[]) => {
-      setCompletedItems((prev) => {
-        const next = new Set(prev);
-        groupItems.forEach(({ itemKey }) => next.add(itemKey));
+    async (groupItems: { order: Order; itemKey: string }[]) => {
+      const orderUpdates = new Map<string, { order: Order; previousNotes: string | null; cookedIds: string[] }>();
 
-        const checkedOrders = new Set<string>();
-        groupItems.forEach(({ order }) => {
-          if (checkedOrders.has(order.id)) return;
-          checkedOrders.add(order.id);
-
-          if (
-            order.items &&
-            order.items.length > 0 &&
-            order.items.every((it, idx) => next.has(getItemKey(order.id, it, idx)))
-          ) {
-            markDone(order.id);
-          }
-        });
-
-        return next;
+      groupItems.forEach(({ order, itemKey }) => {
+        const itemId = itemKey.includes("_") ? itemKey.split("_")[1] : itemKey;
+        if (!itemId) return;
+        if (!orderUpdates.has(order.id)) {
+          const { cookedItemIds } = parseCustomerNotes(order.customer_notes);
+          orderUpdates.set(order.id, {
+            order,
+            previousNotes: order.customer_notes,
+            cookedIds: [...cookedItemIds],
+          });
+        }
+        const info = orderUpdates.get(order.id)!;
+        if (!info.cookedIds.includes(itemId)) {
+          info.cookedIds.push(itemId);
+        }
       });
+
+      // Optimistic update state
+      setOrders((prev) =>
+        prev.map((o) => {
+          const info = orderUpdates.get(o.id);
+          if (!info) return o;
+          const { cleanNotes, isServed } = parseCustomerNotes(o.customer_notes);
+          const newNotes = buildCustomerNotes(cleanNotes, isServed, info.cookedIds);
+          return { ...o, customer_notes: newNotes };
+        })
+      );
+
+      for (const [orderId, { order, cookedIds }] of orderUpdates.entries()) {
+        if (
+          order.items &&
+          order.items.length > 0 &&
+          order.items.every((it) => it.id && cookedIds.includes(it.id))
+        ) {
+          markDone(order.id);
+        }
+      }
+
+      // Background DB update
+      try {
+        for (const [orderId, { previousNotes, cookedIds }] of orderUpdates.entries()) {
+          await updateOrderCookedItems(orderId, previousNotes, cookedIds);
+        }
+      } catch (err) {
+        console.error("Optimistic batch update failed, rolling back:", err);
+        setOrders((prev) =>
+          prev.map((o) => {
+            const info = orderUpdates.get(o.id);
+            return info ? { ...o, customer_notes: info.previousNotes } : o;
+          })
+        );
+      }
     },
     [markDone]
   );
@@ -393,15 +477,17 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
                       </div>
 
                       {/* Customer Notes */}
-                      {order.customer_notes &&
-                        order.customer_notes.replace(/\[SERVED\]/g, "").trim() && (
+                      {(() => {
+                        const { cleanNotes } = parseCustomerNotes(order.customer_notes);
+                        return cleanNotes ? (
                           <p
                             className="text-xs px-2.5 py-1.5 rounded-xl border border-indigo-900/50"
                             style={{ background: "#1e1b4b", color: "#a5b4fc" }}
                           >
-                            🗒️ {order.customer_notes.replace(/\[SERVED\]/g, "").trim()}
+                            🗒️ {cleanNotes}
                           </p>
-                        )}
+                        ) : null;
+                      })()}
 
                       <p className="text-[11px] text-slate-500">
                         Masuk:{" "}

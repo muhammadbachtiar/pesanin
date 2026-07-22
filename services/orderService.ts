@@ -192,3 +192,43 @@ export async function generateQueueNumber(tenantId: string): Promise<string> {
     if (error || !data) return "001";
     return data as string;
 }
+
+export function parseCustomerNotes(notes: string | null) {
+    const rawNotes = notes || "";
+    const cleanNotes = rawNotes
+        .replace(/\[SERVED\]/g, "")
+        .replace(/\[COOKED:[^\]]*\]/g, "")
+        .trim();
+
+    const isServed = rawNotes.includes("[SERVED]");
+
+    const cookedMatch = rawNotes.match(/\[COOKED:([^\]]*)\]/);
+    const cookedItemIds = cookedMatch && cookedMatch[1]
+        ? cookedMatch[1].split(",")
+        : [];
+
+    return { cleanNotes, isServed, cookedItemIds };
+}
+
+export function buildCustomerNotes(cleanNotes: string, isServed: boolean, cookedItemIds: string[]) {
+    const parts: string[] = [];
+    if (cleanNotes) parts.push(cleanNotes);
+    if (isServed) parts.push("[SERVED]");
+    if (cookedItemIds.length > 0) parts.push(`[COOKED:${cookedItemIds.join(",")}]`);
+    return parts.join(" ").trim();
+}
+
+export async function updateOrderCookedItems(
+    orderId: string,
+    notesSnapshot: string | null,
+    cookedItemIds: string[]
+): Promise<boolean> {
+    const { cleanNotes, isServed } = parseCustomerNotes(notesSnapshot);
+    const newNotes = buildCustomerNotes(cleanNotes, isServed, cookedItemIds);
+    const { error } = await supabase
+        .from("orders")
+        .update({ customer_notes: newNotes || null })
+        .eq("id", orderId);
+    return !error;
+}
+

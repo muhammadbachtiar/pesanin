@@ -304,6 +304,7 @@ export default function SuperAdminPage() {
           <Tooltip title="Buka Kiosk"><Button size="small" onClick={() => window.open(`/${t.slug}/kiosk`, "_blank")}>Kiosk</Button></Tooltip>
           <Tooltip title="Buka Kasir"><Button size="small" onClick={() => window.open(`/${t.slug}/cashier`, "_blank")}>Kasir</Button></Tooltip>
           <Tooltip title="Buka Dapur"><Button size="small" onClick={() => window.open(`/${t.slug}/kitchen`, "_blank")}>Dapur</Button></Tooltip>
+          <Tooltip title="Buka Runner"><Button size="small" onClick={() => window.open(`/${t.slug}/runner`, "_blank")}>Runner</Button></Tooltip>
           <Popconfirm
             title="Hapus tenant ini?"
             description="Semua data (menu, pesanan, akun staff) akan ikut terhapus permanen."

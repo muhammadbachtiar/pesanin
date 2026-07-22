@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { motion } from "framer-motion";
 import { Table, Tag, Button, Modal, Form, Input, Select, Badge, Tabs, Switch, InputNumber, Drawer } from "antd";
-import { getOrdersByTenant, getOrderById, markOrderPaid, markOrderServed, approveOrder, voidOrder, updateOrderStatus, createOrder, generateQueueNumber } from "@/services/orderService";
+import { getOrdersByTenant, getOrderById, markOrderPaid, markOrderServed, approveOrder, voidOrder, updateOrderStatus, createOrder, generateQueueNumber, parseCustomerNotes, buildCustomerNotes, updateOrderCookedItems } from "@/services/orderService";
 import { getTenantBySlug } from "@/services/tenantService";
+import { message } from "antd";
 import { getAllProductsByTenant, getCategoriesWithProducts } from "@/services/productService";
 import { getCurrentProfile } from "@/services/authService";
 import { toggleProductAvailability } from "@/services/productService";
@@ -37,6 +39,44 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [voidForm] = Form.useForm();
   const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
+  const [undoQueueState, setUndoQueueState] = useState<Record<string, string>>({});
+  const undoQueueRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  const cancelCountdownAction = useCallback((orderId: string) => {
+    const timer = undoQueueRef.current[orderId];
+    if (timer) {
+      clearTimeout(timer);
+      delete undoQueueRef.current[orderId];
+      setUndoQueueState((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+    }
+  }, []);
+
+  const startCountdownAction = useCallback((orderId: string, actionLabel: string, actionFn: () => Promise<void>) => {
+    if (undoQueueRef.current[orderId]) {
+      clearTimeout(undoQueueRef.current[orderId]);
+      delete undoQueueRef.current[orderId];
+    }
+
+    setUndoQueueState((prev) => ({ ...prev, [orderId]: actionLabel }));
+
+    const timeout = setTimeout(async () => {
+      if (!undoQueueRef.current[orderId]) return;
+      delete undoQueueRef.current[orderId];
+      setUndoQueueState((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+
+      await actionFn();
+    }, 5000);
+
+    undoQueueRef.current[orderId] = timeout;
+  }, []);
 
   const refreshOrders = useCallback(async (tenantId: string) => {
     const startOfToday = new Date();
@@ -126,7 +166,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     try {
       const targetStatus = payModal.autoComplete ? "completed" : undefined;
       await markOrderPaid(order.id, payMethod, profile.id, targetStatus);
-      
+
       if (printOnSubmit) {
         handlePrintReceipt();
       }
@@ -218,12 +258,14 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const cartTkwy = (orderType === "takeaway" && fc) ? fc.takeaway_fee : 0;
   const cartTotal = cartSubtotal + cartTax + cartSvc + cartTkwy;
 
-  const handleCreateCashierOrder = async () => {
+  const handleCreateCashierOrder = async (mode: "pay_now" | "save_pending" = "pay_now") => {
     if (!tenant || !profile || cart.length === 0 || submitting["createOrder"]) return;
     setSubmitting((s) => ({ ...s, createOrder: true }));
     try {
       const qn = await generateQueueNumber(tenant.id);
-      await createOrder(
+      const isPayNow = mode === "pay_now";
+
+      const created = await createOrder(
         {
           tenant_id: tenant.id,
           queue_number: qn,
@@ -254,16 +296,79 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           notes: c.notes || undefined,
         }))
       );
+
       setCart([]);
       setTableNumber("");
       setCustomerNotes("");
       setOrderType("dine_in");
       setNewOrderDrawer(false);
+
+      if (created) {
+        if (isPayNow) {
+          // Direct payment mode -> set to cooking and open payment modal
+          await updateOrderStatus(created.id, "cooking");
+          setPayModal({ open: true, order: created, autoComplete: false });
+          setPayMethod("cash");
+          setCashReceived(created.total_amount);
+          message.success(`Pesanan #${qn} berhasil dikirim ke Dapur!`);
+        } else {
+          message.success(`Pesanan #${qn} berhasil disimpan di daftar Menunggu`);
+        }
+      }
+
       if (tenant) refreshOrders(tenant.id);
     } finally {
       setSubmitting((s) => ({ ...s, createOrder: false }));
     }
   };
+
+  const toggleItemCompleteCashier = useCallback(
+    async (order: Order, itemId: string) => {
+      if (!itemId) return;
+      const { cleanNotes, isServed, cookedItemIds } = parseCustomerNotes(order.customer_notes);
+      const isAlreadyCooked = cookedItemIds.includes(itemId);
+
+      let newCookedItemIds: string[];
+      if (isAlreadyCooked) {
+        newCookedItemIds = cookedItemIds.filter((id) => id !== itemId);
+        cancelCountdownAction(order.id);
+      } else {
+        newCookedItemIds = [...cookedItemIds, itemId];
+      }
+
+      const newNotes = buildCustomerNotes(cleanNotes, isServed, newCookedItemIds);
+      const previousNotes = order.customer_notes;
+
+      // Optimistic state update in Cashier table
+      setOrders((prev) =>
+        prev.map((o) => (o.id === order.id ? { ...o, customer_notes: newNotes } : o))
+      );
+
+      const allCooked =
+        order.items &&
+        order.items.length > 0 &&
+        order.items.every((it) => it.id && newCookedItemIds.includes(it.id));
+
+      if (allCooked && order.order_status === "cooking" && !isAlreadyCooked) {
+        startCountdownAction(order.id, "Tandai Siap", async () => {
+          await updateOrderStatus(order.id, "ready");
+          if (tenant) refreshOrders(tenant.id);
+        });
+      }
+
+      try {
+        const ok = await updateOrderCookedItems(order.id, previousNotes, newCookedItemIds);
+        if (!ok) throw new Error("Gagal menyimpan ke DB");
+      } catch (err) {
+        console.error("Optimistic cashier update failed:", err);
+        setOrders((prev) =>
+          prev.map((o) => (o.id === order.id ? { ...o, customer_notes: previousNotes } : o))
+        );
+        cancelCountdownAction(order.id);
+      }
+    },
+    [cancelCountdownAction, startCountdownAction, tenant, refreshOrders]
+  );
 
   // ──────────────────────────── Filtered product list ───────────────────────────────
   const visibleProducts = products.filter((p) => {
@@ -303,24 +408,43 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     {
       title: "Item Pesanan",
       render: (_: unknown, r: Order) => {
-        const cleanNotes = r.customer_notes?.replace(/\[SERVED\]/g, "").trim();
-        const isServed = r.customer_notes?.includes("[SERVED]");
+        const { cleanNotes, isServed, cookedItemIds } = parseCustomerNotes(r.customer_notes);
+        const isCooking = r.order_status === "cooking";
         return (
           <div className="text-sm space-y-1">
             {r.items && r.items.length > 0 ? (
-              r.items.map((it, i) => (
-                <div key={i} className="flex items-start gap-1.5">
-                  <span className="font-bold text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 flex-shrink-0">
-                    ×{it.quantity}
-                  </span>
-                  <div>
-                    <span className="font-medium">{it.product_name_snapshot}</span>
-                    {it.notes && (
-                      <span className="block text-xs text-amber-600">📝 {it.notes}</span>
-                    )}
+              r.items.map((it, i) => {
+                const isCooked = it.id && cookedItemIds.includes(it.id);
+                return (
+                  <div
+                    key={i}
+                    onClick={() => isCooking && it.id && toggleItemCompleteCashier(r, it.id)}
+                    className={`flex items-center gap-1.5 p-1 rounded-md transition-colors ${
+                      isCooking ? "cursor-pointer hover:bg-gray-100" : ""
+                    }`}
+                    title={isCooking ? "Klik untuk ubah status matang item" : undefined}
+                  >
+                    <span className="font-bold text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 flex-shrink-0">
+                      ×{it.quantity}
+                    </span>
+                    <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1">
+                      <span className={`font-medium ${isCooked ? "line-through text-gray-400" : ""}`}>
+                        {it.product_name_snapshot}
+                      </span>
+                      {isCooked ? (
+                        <span className="text-emerald-600 text-xs font-black" title="Siap">✓</span>
+                      ) : (
+                        isCooking && (
+                          <span className="text-amber-500 text-xs leading-none animate-pulse" title="Sedang dimasak">●</span>
+                        )
+                      )}
+                      {it.notes && (
+                        <span className="text-xs text-amber-600 font-medium ml-1">📝 {it.notes}</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <span className="text-gray-400 text-xs">—</span>
             )}
@@ -363,6 +487,16 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         const isDineIn = r.order_type === "dine_in";
         const isUnpaid = r.payment_status === "unpaid";
         const isPaid = r.payment_status === "paid";
+        const pendingActionLabel = undoQueueState[r.id];
+
+        if (pendingActionLabel) {
+          return (
+            <CashierUndoButton
+              label={pendingActionLabel}
+              onUndo={() => cancelCountdownAction(r.id)}
+            />
+          );
+        }
 
         return (
           <div className="flex flex-wrap gap-1.5">
@@ -405,6 +539,18 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
             {/* TAB SEDANG DIMASAK (cooking) */}
             {r.order_status === "cooking" && (
               <>
+                <Button
+                  size="small"
+                  style={{ background: "#3b82f6", color: "#fff", border: "none" }}
+                  onClick={() =>
+                    startCountdownAction(r.id, "Tandai Siap", async () => {
+                      await updateOrderStatus(r.id, "ready");
+                      if (tenant) refreshOrders(tenant.id);
+                    })
+                  }
+                >
+                  ✅ Tandai Siap
+                </Button>
                 {isUnpaid && (
                   <Button
                     type="primary"
@@ -430,7 +576,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     size="small"
                     loading={submitting[`serve_${r.id}`]}
                     style={{ background: "#f59e0b", color: "#fff", border: "none" }}
-                    onClick={() => handleServe(r.id, r.customer_notes)}
+                    onClick={() =>
+                      startCountdownAction(r.id, "Sajikan", async () => {
+                        await handleServe(r.id, r.customer_notes);
+                      })
+                    }
                   >
                     🍽️ Sajikan
                   </Button>
@@ -445,11 +595,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                         loading={submitting[`complete_${r.id}`]}
                         style={{ background: "#3b82f6", color: "#fff", border: "none" }}
                         onClick={() =>
-                          Modal.confirm({
-                            title: isDineIn
-                              ? "Pesanan sudah selesai?"
-                              : "Tandai pesanan sudah diambil?",
-                            onOk: () => handleReadyToComplete(r.id),
+                          startCountdownAction(r.id, "Selesai", async () => {
+                            await handleReadyToComplete(r.id);
                           })
                         }
                       >
@@ -777,11 +924,10 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                         setCashReceived(payModal.order?.total_amount ?? 0);
                       }
                     }}
-                    className={`p-2.5 rounded-xl border text-center transition-all flex flex-col items-center gap-1 ${
-                      payMethod === m.key
+                    className={`p-2.5 rounded-xl border text-center transition-all flex flex-col items-center gap-1 ${payMethod === m.key
                         ? "border-indigo-600 bg-indigo-50/50 text-indigo-700 shadow-sm ring-2 ring-indigo-500/20"
                         : "border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-                    }`}
+                      }`}
                   >
                     <span className="text-xl">{m.icon}</span>
                     <span className="text-xs font-bold">{m.label}</span>
@@ -827,11 +973,10 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                           key={idx}
                           type="button"
                           onClick={() => setCashReceived(p.val)}
-                          className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all ${
-                            cashReceived === p.val
+                          className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all ${cashReceived === p.val
                               ? "bg-amber-600 text-white border-amber-600 shadow-sm"
                               : "bg-white text-amber-900 border-amber-200 hover:bg-amber-100/50"
-                          }`}
+                            }`}
                         >
                           {p.label === "Uang Pas" ? "✨ Uang Pas" : `Rp ${p.val.toLocaleString("id-ID")}`}
                         </button>
@@ -1295,22 +1440,60 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   </div>
                 </div>
               )}
-              <button
-                onClick={handleCreateCashierOrder}
-                disabled={cart.length === 0 || submitting["createOrder"]}
-                className="w-full py-3.5 rounded-xl font-bold text-white text-base transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-                style={{ background: (cart.length > 0 && !submitting["createOrder"]) ? "var(--tenant-primary)" : "#94a3b8" }}
-              >
-                {submitting["createOrder"]
-                  ? "Memproses Pesanan..."
-                  : cart.length === 0
-                  ? "Pilih Menu Terlebih Dahulu"
-                  : `Buat Pesanan · Rp ${cartTotal.toLocaleString("id-ID")}`}
-              </button>
+              <div className="flex gap-2 w-full">
+                <button
+                  onClick={() => handleCreateCashierOrder("save_pending")}
+                  disabled={cart.length === 0 || submitting["createOrder"]}
+                  className="px-3 py-3 rounded-xl font-bold text-xs border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  📋 Simpan Menunggu
+                </button>
+                <button
+                  onClick={() => handleCreateCashierOrder("pay_now")}
+                  disabled={cart.length === 0 || submitting["createOrder"]}
+                  className="flex-1 py-3 rounded-xl font-bold text-white text-sm transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed shadow-md"
+                  style={{ background: (cart.length > 0 && !submitting["createOrder"]) ? "var(--tenant-primary)" : "#94a3b8" }}
+                >
+                  {submitting["createOrder"]
+                    ? "Memproses Pesanan..."
+                    : cart.length === 0
+                      ? "Pilih Menu Terlebih Dahulu"
+                      : `💳 Bayar & Masuk Dapur · Rp ${cartTotal.toLocaleString("id-ID")}`}
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </Drawer>
+    </div>
+  );
+}
+
+function CashierUndoButton({ label, onUndo }: { label: string; onUndo: () => void }) {
+  const [remaining, setRemaining] = useState(5);
+
+  useEffect(() => {
+    if (remaining <= 0) return;
+    const t = setInterval(() => setRemaining((r) => r - 1), 1000);
+    return () => clearInterval(t);
+  }, [remaining]);
+
+  return (
+    <div className="w-full space-y-1">
+      <div className="h-1.5 rounded-full overflow-hidden bg-gray-200">
+        <motion.div
+          className="h-full rounded-full bg-emerald-500"
+          initial={{ width: "100%" }}
+          animate={{ width: "0%" }}
+          transition={{ duration: 5, ease: "linear" }}
+        />
+      </div>
+      <button
+        onClick={onUndo}
+        className="w-full py-1 px-2 rounded-lg font-bold text-xs bg-amber-100 text-amber-800 hover:bg-amber-200 transition-colors border border-amber-300 shadow-sm"
+      >
+        ↩️ Urungkan {label} ({remaining}s)
+      </button>
     </div>
   );
 }
