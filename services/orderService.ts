@@ -232,3 +232,22 @@ export async function updateOrderCookedItems(
     return !error;
 }
 
+export async function getActiveOrderByTable(
+    tenantId: string,
+    tableNumber: string
+): Promise<Order | null> {
+    const trimmedTable = tableNumber.trim();
+    if (!trimmedTable) return null;
+
+    const { data, error } = await supabase
+        .from("orders")
+        .select("id, queue_number, table_number, order_status")
+        .eq("tenant_id", tenantId)
+        .ilike("table_number", trimmedTable)
+        .in("order_status", ["pending", "cooking", "ready"])
+        .limit(1);
+
+    if (error || !data || data.length === 0) return null;
+    return data[0] as Order;
+}
+

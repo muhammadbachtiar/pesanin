@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { getTenantBySlug } from "@/services/tenantService";
 import { getCategoriesWithProducts, getProductsByTenant } from "@/services/productService";
-import { createOrder, generateQueueNumber } from "@/services/orderService";
+import { createOrder, generateQueueNumber, getActiveOrderByTable } from "@/services/orderService";
 import { validateTableToken } from "@/services/tableService";
 import type { Tenant, Category, Product, CartItem, OrderType, TableRecord } from "@/types";
 
@@ -41,6 +41,8 @@ export default function KioskPage({
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
   const [queueNumber, setQueueNumber] = useState<string>("");
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [tableInputError, setTableInputError] = useState<string | null>(null);
+  const [isCheckingTable, setIsCheckingTable] = useState(false);
   const slugRef = useRef<string>("");
 
   useEffect(() => {
@@ -140,6 +142,24 @@ export default function KioskPage({
 
   const handleCheckout = async () => {
     if (!tenant || isCheckingOut) return;
+
+    const isTableMode = tenant.business_logic.numbering === "table" && orderType !== "takeaway";
+    const targetTableNum = (tableRecord?.display_name ?? tableRecord?.table_number ?? tableInputValue).trim();
+
+    if (isTableMode) {
+      if (!targetTableNum) {
+        alert("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+        setScreen("table_input");
+        return;
+      }
+      const activeExisting = await getActiveOrderByTable(tenant.id, targetTableNum);
+      if (activeExisting) {
+        alert(`⚠️ Meja "${targetTableNum}" sedang terisi oleh pesanan aktif yang belum selesai. Harap gunakan nomor meja lain!`);
+        setScreen("table_input");
+        return;
+      }
+    }
+
     setIsCheckingOut(true);
     try {
       const fc = tenant.finance_config;
@@ -154,7 +174,7 @@ export default function KioskPage({
         {
           tenant_id: tenant.id,
           queue_number: qn,
-          table_number: orderType !== "takeaway" ? (tableRecord?.table_number ?? tableInputValue) : undefined,
+          table_number: isTableMode ? targetTableNum : undefined,
           table_id: orderType !== "takeaway" ? tableRecord?.id : undefined,
           order_type: orderType,
           subtotal,
@@ -618,17 +638,40 @@ export default function KioskPage({
             <input
               type="text"
               value={tableInputValue}
-              onChange={(e) => setTableInputValue(e.target.value)}
+              onChange={(e) => {
+                setTableInputValue(e.target.value);
+                setTableInputError(null);
+              }}
               placeholder="Contoh: 05"
               className="w-40 text-center text-4xl font-bold border-b-4 bg-transparent outline-none py-2"
-              style={{ borderColor: "var(--tenant-primary)" }}
+              style={{ borderColor: tableInputError ? "#ef4444" : "var(--tenant-primary)" }}
             />
+            {tableInputError && (
+              <p className="text-red-500 text-sm font-semibold text-center max-w-sm">{tableInputError}</p>
+            )}
             <button
-              className="btn-primary px-12 py-4 text-xl rounded-2xl"
-              onClick={() => setScreen("summary")}
-              disabled={!tableInputValue}
+              className="btn-primary px-12 py-4 text-xl rounded-2xl disabled:opacity-50"
+              disabled={!tableInputValue.trim() || isCheckingTable}
+              onClick={async () => {
+                const trimmed = tableInputValue.trim();
+                if (!trimmed) {
+                  setTableInputError("Nomor meja wajib diisi!");
+                  return;
+                }
+                if (tenant) {
+                  setIsCheckingTable(true);
+                  const activeExisting = await getActiveOrderByTable(tenant.id, trimmed);
+                  setIsCheckingTable(false);
+                  if (activeExisting) {
+                    setTableInputError(`⚠️ Meja "${trimmed}" sedang terisi oleh pesanan yang belum selesai. Harap pilih nomor meja lain!`);
+                    return;
+                  }
+                }
+                setTableInputError(null);
+                setScreen("summary");
+              }}
             >
-              Lanjutkan
+              {isCheckingTable ? "Memeriksa..." : "Lanjutkan"}
             </button>
           </motion.div>
         )}
