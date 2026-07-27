@@ -51,7 +51,7 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
       if (full) setOrders((prev) => [full, ...prev.filter((o) => o.id !== full.id)]);
     },
     async (updated) => {
-      if (updated.order_status === "cooking" && shouldShowInKitchen(updated, tenant)) {
+      if (shouldShowInKitchen(updated, tenant) && updated.order_status !== "ready" && updated.order_status !== "completed" && updated.order_status !== "cancelled") {
         const full = await getOrderById(updated.id);
         if (full) {
           setOrders((prev) =>
@@ -65,7 +65,13 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
       }
     },
     (order) => (shouldShowInKitchen(order, tenant) ? "new" : false),
-    (order) => (order.order_status === "cooking" && shouldShowInKitchen(order, tenant) ? "new" : false)
+    (order) =>
+      shouldShowInKitchen(order, tenant) &&
+      order.order_status !== "ready" &&
+      order.order_status !== "completed" &&
+      order.order_status !== "cancelled"
+        ? "new"
+        : false
   );
 
   const undoMark = useCallback((orderId: string) => {
@@ -703,7 +709,7 @@ function shouldShowInKitchen(order: Order, tenant: Tenant | null): boolean {
   if (!tenant) return false;
   const bl = tenant.business_logic;
   if (bl.payment_timing === "prepaid") {
-    return order.payment_status === "paid";
+    return order.payment_status === "paid" || order.order_status === "cooking";
   }
   if (bl.require_cashier_verification) {
     return order.verification_status === "verified";

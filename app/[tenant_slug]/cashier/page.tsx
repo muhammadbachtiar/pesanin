@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { motion } from "framer-motion";
-import { Table, Tag, Button, Modal, Form, Input, Select, Badge, Tabs, Switch, InputNumber, Drawer } from "antd";
+import { Table, Tag, Button, Modal, Form, Input, Select, Badge, Tabs, Switch, InputNumber, Drawer, Space } from "antd";
 import { getOrdersByTenant, getOrderById, markOrderPaid, markOrderServed, approveOrder, voidOrder, updateOrderStatus, createOrder, generateQueueNumber, parseCustomerNotes, buildCustomerNotes, updateOrderCookedItems, getActiveOrderByTable } from "@/services/orderService";
 import { getTenantBySlug } from "@/services/tenantService";
 import { message } from "antd";
@@ -90,6 +90,16 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
     const data = await getOrdersByTenant(tenantId, undefined, startOfToday.toISOString(), endOfToday.toISOString());
+    for (const o of data) {
+      if (o.order_status === "ready" && o.payment_status === "paid") {
+        const { isServed } = parseCustomerNotes(o.customer_notes);
+        if (isServed) {
+          updateOrderStatus(o.id, "completed");
+          o.order_status = "completed";
+        }
+      }
+    }
+
     setOrders(data);
     setPendingBadge(
       data.filter(
@@ -132,6 +142,13 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     async (updated) => {
       const full = await getOrderById(updated.id);
       const order = full ?? updated;
+      if (order.order_status === "ready" && order.payment_status === "paid") {
+        const { isServed } = parseCustomerNotes(order.customer_notes);
+        if (isServed) {
+          await updateOrderStatus(order.id, "completed");
+          order.order_status = "completed";
+        }
+      }
       setOrders((prev) => prev.map((o) => (o.id === order.id ? order : o)));
       setPendingBadge((n) => {
         const wasPending = updated.order_status === "pending";
@@ -142,7 +159,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       });
     },
     () => "new",
-    (order) => order.order_status === "ready" ? "ready" : false
+    (order) => {
+      if (order.order_status === "ready") return "ready";
+      if (order.order_status === "cooking" || order.order_status === "pending") return "new";
+      return false;
+    }
   );
 
   const handleVoid = async (values: { reason: string }) => {
@@ -173,30 +194,29 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
     setSubmitting((s) => ({ ...s, pay: true }));
     try {
-      const targetStatus: Order["order_status"] = payModal.autoComplete
+      const { isServed } = parseCustomerNotes(fullOrder.customer_notes);
+      const targetStatus: Order["order_status"] = (payModal.autoComplete || (isServed && fullOrder.order_status === "ready"))
         ? "completed"
         : fullOrder.order_status === "pending"
-        ? "cooking"
-        : fullOrder.order_status;
+          ? "cooking"
+          : fullOrder.order_status;
 
-      // Set print receipt data FIRST so #receipt-print-area is mounted independently
       setPrintReceiptData({
         order: fullOrder,
         payMethod,
         cashReceived,
       });
 
-      // Optimistic update of order status in UI so tables don't flicker or lose data
       setOrders((prev) =>
         prev.map((o) =>
           o.id === fullOrder.id
             ? {
-                ...o,
-                payment_status: "paid",
-                payment_method: payMethod,
-                verification_status: "verified",
-                order_status: targetStatus,
-              }
+              ...o,
+              payment_status: "paid",
+              payment_method: payMethod,
+              verification_status: "verified",
+              order_status: targetStatus,
+            }
             : o
         )
       );
@@ -228,14 +248,17 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     }
   };
 
-  const handleServe = async (orderId: string, currentNotes?: string | null) => {
-    if (submitting[`serve_${orderId}`]) return;
-    setSubmitting((s) => ({ ...s, [`serve_${orderId}`]: true }));
+  const handleServe = async (order: Order) => {
+    if (submitting[`serve_${order.id}`]) return;
+    setSubmitting((s) => ({ ...s, [`serve_${order.id}`]: true }));
     try {
-      await markOrderServed(orderId, currentNotes);
+      await markOrderServed(order.id, order.customer_notes);
+      if (order.payment_status === "paid") {
+        await updateOrderStatus(order.id, "completed");
+      }
       if (tenant) refreshOrders(tenant.id);
     } finally {
-      setSubmitting((s) => ({ ...s, [`serve_${orderId}`]: false }));
+      setSubmitting((s) => ({ ...s, [`serve_${order.id}`]: false }));
     }
   };
 
@@ -494,9 +517,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   <div
                     key={i}
                     onClick={() => isCooking && it.id && toggleItemCompleteCashier(r, it.id)}
-                    className={`flex items-center gap-1.5 p-1 rounded-md transition-colors ${
-                      isCooking ? "cursor-pointer hover:bg-gray-100" : ""
-                    }`}
+                    className={`flex items-center gap-1.5 p-1 rounded-md transition-colors ${isCooking ? "cursor-pointer hover:bg-gray-100" : ""
+                      }`}
                     title={isCooking ? "Klik untuk ubah status matang item" : undefined}
                   >
                     <span className="font-bold text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 flex-shrink-0">
@@ -653,7 +675,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     style={{ background: "#f59e0b", color: "#fff", border: "none" }}
                     onClick={() =>
                       startCountdownAction(r.id, "Sajikan", async () => {
-                        await handleServe(r.id, r.customer_notes);
+                        await handleServe(r);
                       })
                     }
                   >
@@ -713,7 +735,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
             )}
 
             {/* VOID BUTTON */}
-            {r.order_status !== "cancelled" && r.order_status !== "completed" && (
+            {r.order_status !== "cancelled" && !isOrderEffectivelyCompleted(r) && (
               <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
                 Void
               </Button>
@@ -724,12 +746,39 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     },
   ];
 
-  const filterOrders = (statuses: Order["order_status"][], payStatuses?: Order["payment_status"][]) =>
-    orders.filter(
-      (o) =>
-        statuses.includes(o.order_status) &&
-        (payStatuses ? payStatuses.includes(o.payment_status) : true)
-    );
+  const isOrderEffectivelyCompleted = useCallback((o: Order) => {
+    if (o.order_status === "completed") return true;
+    if (o.order_status === "ready") {
+      const { isServed } = parseCustomerNotes(o.customer_notes);
+      const isDineIn = o.order_type !== "takeaway";
+      const isPaid = o.payment_status === "paid";
+      if (isDineIn && isServed && isPaid) {
+        return true;
+      }
+    }
+    return false;
+  }, []);
+
+  const filterOrders = useCallback(
+    (statuses: Order["order_status"][], payStatuses?: Order["payment_status"][]) =>
+      orders.filter((o) => {
+        if (statuses.includes("completed")) {
+          if (o.order_status === "cancelled") return true;
+          if (isOrderEffectivelyCompleted(o)) return true;
+          return false;
+        }
+        if (statuses.includes("ready")) {
+          if (isOrderEffectivelyCompleted(o)) return false;
+          if (o.order_status !== "ready") return false;
+          return payStatuses ? payStatuses.includes(o.payment_status) : true;
+        }
+        return (
+          statuses.includes(o.order_status) &&
+          (payStatuses ? payStatuses.includes(o.payment_status) : true)
+        );
+      }),
+    [orders, isOrderEffectivelyCompleted]
+  );
 
   if (!tenant) return <div className="p-8 text-gray-400">Loading...</div>;
 
@@ -900,7 +949,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         footer={null}
         width={600}
         centered
-        destroyOnClose
+        destroyOnHidden
         title={
           <div className="flex items-center gap-3 pb-2 border-b">
             <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl font-bold flex-shrink-0">
@@ -1000,8 +1049,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                       }
                     }}
                     className={`p-2.5 rounded-xl border text-center transition-all flex flex-col items-center gap-1 ${payMethod === m.key
-                        ? "border-indigo-600 bg-indigo-50/50 text-indigo-700 shadow-sm ring-2 ring-indigo-500/20"
-                        : "border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
+                      ? "border-indigo-600 bg-indigo-50/50 text-indigo-700 shadow-sm ring-2 ring-indigo-500/20"
+                      : "border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
                       }`}
                   >
                     <span className="text-xl">{m.icon}</span>
@@ -1021,16 +1070,20 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   <span className="text-[11px] text-amber-700 font-medium">Input atau Pilih Uang Pas</span>
                 </div>
 
-                <InputNumber
-                  className="w-full text-lg font-bold"
-                  size="large"
-                  value={cashReceived}
-                  onChange={(v) => setCashReceived(v)}
-                  addonBefore={<span className="font-bold text-gray-600">Rp</span>}
-                  formatter={(val) => `${val}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
-                  parser={(val) => Number(val?.replace(/\./g, "") || 0)}
-                  placeholder="Masukkan nominal bayar..."
-                />
+                <Space.Compact className="w-full" size="large">
+                  <span className="inline-flex items-center px-3 border border-r-0 border-gray-300 bg-gray-50 rounded-l-lg font-bold text-gray-600 text-sm">
+                    Rp
+                  </span>
+                  <InputNumber
+                    className="w-full text-lg font-bold"
+                    size="large"
+                    value={cashReceived}
+                    onChange={(v) => setCashReceived(v)}
+                    formatter={(val) => `${val}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
+                    parser={(val) => Number(val?.replace(/\./g, "") || 0)}
+                    placeholder="Masukkan nominal bayar..."
+                  />
+                </Space.Compact>
 
                 {/* Quick Nominal Shortcuts */}
                 {payModal.order && (
@@ -1049,8 +1102,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                           type="button"
                           onClick={() => setCashReceived(p.val)}
                           className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all ${cashReceived === p.val
-                              ? "bg-amber-600 text-white border-amber-600 shadow-sm"
-                              : "bg-white text-amber-900 border-amber-200 hover:bg-amber-100/50"
+                            ? "bg-amber-600 text-white border-amber-600 shadow-sm"
+                            : "bg-white text-amber-900 border-amber-200 hover:bg-amber-100/50"
                             }`}
                         >
                           {p.label === "Uang Pas" ? "✨ Uang Pas" : `Rp ${p.val.toLocaleString("id-ID")}`}
@@ -1272,7 +1325,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       <Drawer
         title={null}
         placement="right"
-        width="100%"
+        size="large"
+        style={{ width: "100%" }}
         open={newOrderDrawer}
         onClose={() => {
           setNewOrderDrawer(false);
@@ -1322,22 +1376,20 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
               <button
                 type="button"
                 onClick={() => setPosMobileTab("menu")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  posMobileTab === "menu"
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${posMobileTab === "menu"
                     ? "bg-white text-gray-900 shadow-2xs"
                     : "text-gray-500 hover:text-gray-700"
-                }`}
+                  }`}
               >
                 🍽️ Menu ({visibleProducts.length})
               </button>
               <button
                 type="button"
                 onClick={() => setPosMobileTab("cart")}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative ${
-                  posMobileTab === "cart"
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative ${posMobileTab === "cart"
                     ? "bg-white text-gray-900 shadow-2xs"
                     : "text-gray-500 hover:text-gray-700"
-                }`}
+                  }`}
               >
                 🛒 Cart ({cart.reduce((s, c) => s + c.quantity, 0)})
                 {cart.length > 0 && (
@@ -1370,9 +1422,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
             {/* ── LEFT: Product Catalog Panel (Menu) ── */}
             <div
-              className={`flex-col md:flex md:w-[60%] lg:w-[64%] xl:w-[66%] min-w-0 border-r bg-gray-50/70 h-full ${
-                posMobileTab === "menu" ? "flex flex-1" : "hidden md:flex"
-              }`}
+              className={`flex-col md:flex md:w-[60%] lg:w-[64%] xl:w-[66%] min-w-0 border-r bg-gray-50/70 h-full ${posMobileTab === "menu" ? "flex flex-1" : "hidden md:flex"
+                }`}
             >
               {/* Search & Category Filter Header */}
               <div className="p-3 sm:p-4 bg-white border-b shadow-2xs space-y-2.5 flex-shrink-0">
@@ -1407,11 +1458,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                       style={
                         !selectedCat
                           ? {
-                              background: "var(--tenant-primary)",
-                              color: "#fff",
-                              borderColor: "var(--tenant-primary)",
-                              boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
-                            }
+                            background: "var(--tenant-primary)",
+                            color: "#fff",
+                            borderColor: "var(--tenant-primary)",
+                            boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
+                          }
                           : { background: "#fff", color: "#64748b", borderColor: "#e2e8f0" }
                       }
                     >
@@ -1428,11 +1479,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                           style={
                             selectedCat === cat.id
                               ? {
-                                  background: "var(--tenant-primary)",
-                                  color: "#fff",
-                                  borderColor: "var(--tenant-primary)",
-                                  boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
-                                }
+                                background: "var(--tenant-primary)",
+                                color: "#fff",
+                                borderColor: "var(--tenant-primary)",
+                                boxShadow: "0 2px 6px rgba(0,0,0,0.12)",
+                              }
                               : { background: "#fff", color: "#64748b", borderColor: "#e2e8f0" }
                           }
                         >
@@ -1552,9 +1603,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
             {/* ── RIGHT: Order Details & Cart Panel ── */}
             <div
-              className={`flex-col md:flex md:w-[40%] lg:w-[36%] xl:w-[34%] min-w-0 bg-white h-full ${
-                posMobileTab === "cart" ? "flex flex-1" : "hidden md:flex"
-              }`}
+              className={`flex-col md:flex md:w-[40%] lg:w-[36%] xl:w-[34%] min-w-0 bg-white h-full ${posMobileTab === "cart" ? "flex flex-1" : "hidden md:flex"
+                }`}
             >
               {/* Cart Header (Mobile Back Button + Title) */}
               <div className="px-4 py-3 border-b bg-gray-50 shadow-2xs flex items-center justify-between flex-shrink-0">
@@ -1592,11 +1642,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                         style={
                           orderType === t
                             ? {
-                                background: "var(--tenant-primary)",
-                                color: "#fff",
-                                border: "1.5px solid var(--tenant-primary)",
-                                boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
-                              }
+                              background: "var(--tenant-primary)",
+                              color: "#fff",
+                              border: "1.5px solid var(--tenant-primary)",
+                              boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+                            }
                             : { background: "#fff", color: "#64748b", border: "1.5px solid #e2e8f0" }
                         }
                       >
