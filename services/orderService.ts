@@ -14,6 +14,7 @@ export interface CreateOrderPayload {
     total_amount: number;
     payment_method?: PaymentMethodType;
     selected_manual_channel_id?: string;
+    customer_name?: string;
     customer_notes?: string;
     created_by_cashier?: boolean;
     cashier_profile_id?: string;
@@ -37,12 +38,39 @@ export async function createOrder(
     order: CreateOrderPayload,
     items: Omit<CreateOrderItemPayload, "order_id" | "tenant_id">[]
 ): Promise<Order | null> {
-    const { data: orderData, error: orderError } = await supabase
+    let finalNotes = order.customer_notes || "";
+    if (order.customer_name?.trim() && !finalNotes.includes("[NAME:")) {
+        const { cleanNotes, isServed, cookedItemIds } = parseCustomerNotes(finalNotes);
+        finalNotes = buildCustomerNotes(cleanNotes, isServed, cookedItemIds, order.customer_name);
+    }
+
+    const payloadWithNotes = {
+        ...order,
+        customer_notes: finalNotes || undefined,
+    };
+
+    let { data: orderData, error: orderError } = await supabase
         .from("orders")
-        .insert(order)
+        .insert(payloadWithNotes)
         .select()
         .single();
-    if (orderError || !orderData) return null;
+
+    // Fallback: If 'customer_name' column is not in Supabase schema yet, retry without 'customer_name' key
+    if (orderError && (orderError.message?.includes("customer_name") || orderError.code === "PGRST204")) {
+        const { customer_name, ...payloadWithoutNameCol } = payloadWithNotes;
+        const retryResult = await supabase
+            .from("orders")
+            .insert(payloadWithoutNameCol)
+            .select()
+            .single();
+        orderData = retryResult.data;
+        orderError = retryResult.error;
+    }
+
+    if (orderError || !orderData) {
+        console.error("Error creating order:", orderError);
+        return null;
+    }
 
     const itemRows = items.map((i) => ({
         ...i,
@@ -193,26 +221,31 @@ export async function generateQueueNumber(tenantId: string): Promise<string> {
     return data as string;
 }
 
-export function parseCustomerNotes(notes: string | null) {
+export function parseCustomerNotes(notes: string | null, rawCustomerName?: string | null) {
     const rawNotes = notes || "";
     const cleanNotes = rawNotes
         .replace(/\[SERVED\]/g, "")
         .replace(/\[COOKED:[^\]]*\]/g, "")
+        .replace(/\[NAME:[^\]]*\]/g, "")
         .trim();
 
     const isServed = rawNotes.includes("[SERVED]");
+
+    const nameMatch = rawNotes.match(/\[NAME:([^\]]*)\]/);
+    const customerName = rawCustomerName?.trim() || (nameMatch && nameMatch[1] ? nameMatch[1].trim() : null);
 
     const cookedMatch = rawNotes.match(/\[COOKED:([^\]]*)\]/);
     const cookedItemIds = cookedMatch && cookedMatch[1]
         ? cookedMatch[1].split(",")
         : [];
 
-    return { cleanNotes, isServed, cookedItemIds };
+    return { cleanNotes, isServed, cookedItemIds, customerName };
 }
 
-export function buildCustomerNotes(cleanNotes: string, isServed: boolean, cookedItemIds: string[]) {
+export function buildCustomerNotes(cleanNotes: string, isServed: boolean, cookedItemIds: string[], customerName?: string | null) {
     const parts: string[] = [];
     if (cleanNotes) parts.push(cleanNotes);
+    if (customerName) parts.push(`[NAME:${customerName.trim()}]`);
     if (isServed) parts.push("[SERVED]");
     if (cookedItemIds.length > 0) parts.push(`[COOKED:${cookedItemIds.join(",")}]`);
     return parts.join(" ").trim();
@@ -223,8 +256,8 @@ export async function updateOrderCookedItems(
     notesSnapshot: string | null,
     cookedItemIds: string[]
 ): Promise<boolean> {
-    const { cleanNotes, isServed } = parseCustomerNotes(notesSnapshot);
-    const newNotes = buildCustomerNotes(cleanNotes, isServed, cookedItemIds);
+    const { cleanNotes, isServed, customerName } = parseCustomerNotes(notesSnapshot);
+    const newNotes = buildCustomerNotes(cleanNotes, isServed, cookedItemIds, customerName);
     const { error } = await supabase
         .from("orders")
         .update({ customer_notes: newNotes || null })

@@ -11,6 +11,7 @@ import { getCurrentProfile } from "@/services/authService";
 import { toggleProductAvailability } from "@/services/productService";
 import { useRealtimeOrders } from "@/hooks/useRealtime";
 import type { Order, Tenant, Profile, Product, CartItem, PaymentMethodType, Category } from "@/types";
+import { ProductCard } from "@/components/ProductCard";
 
 const STATUS_COLOR: Record<string, string> = {
   pending: "orange", cooking: "blue", ready: "green",
@@ -40,6 +41,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
   const [tableNumber, setTableNumber] = useState("");
   const [customerNotes, setCustomerNotes] = useState("");
+  const [customerName, setCustomerName] = useState("");
   const [productSearch, setProductSearch] = useState("");
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [posMobileTab, setPosMobileTab] = useState<"menu" | "cart">("menu");
@@ -47,43 +49,16 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
   const [undoQueueState, setUndoQueueState] = useState<Record<string, string>>({});
   const undoQueueRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const [windowWidth, setWindowWidth] = useState<number>(typeof window !== "undefined" ? window.innerWidth : 1200);
 
-  const cancelCountdownAction = useCallback((orderId: string) => {
-    const timer = undoQueueRef.current[orderId];
-    if (timer) {
-      clearTimeout(timer);
-      delete undoQueueRef.current[orderId];
-      setUndoQueueState((prev) => {
-        const next = { ...prev };
-        delete next[orderId];
-        return next;
-      });
-    }
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  const startCountdownAction = useCallback((orderId: string, actionLabel: string, actionFn: () => Promise<void>) => {
-    if (undoQueueRef.current[orderId]) {
-      clearTimeout(undoQueueRef.current[orderId]);
-      delete undoQueueRef.current[orderId];
-    }
-
-    setUndoQueueState((prev) => ({ ...prev, [orderId]: actionLabel }));
-
-    const timeout = setTimeout(async () => {
-      if (!undoQueueRef.current[orderId]) return;
-      delete undoQueueRef.current[orderId];
-      setUndoQueueState((prev) => {
-        const next = { ...prev };
-        delete next[orderId];
-        return next;
-      });
-
-      await actionFn();
-    }, 5000);
-
-    undoQueueRef.current[orderId] = timeout;
-  }, []);
-
+  const drawerWidth = windowWidth < 768 ? "100%" : windowWidth < 1280 ? "88%" : "78%";
   const refreshOrders = useCallback(async (tenantId: string) => {
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
@@ -109,6 +84,45 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       ).length
     );
   }, []);
+
+  const cancelCountdownAction = useCallback((orderId: string) => {
+    const timer = undoQueueRef.current[orderId];
+    if (timer) {
+      clearTimeout(timer);
+      delete undoQueueRef.current[orderId];
+      setUndoQueueState((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+      if (tenant) refreshOrders(tenant.id);
+    }
+  }, [tenant, refreshOrders]);
+
+  const startCountdownAction = useCallback((orderId: string, actionLabel: string, actionFn: () => Promise<void>) => {
+    if (undoQueueRef.current[orderId]) {
+      clearTimeout(undoQueueRef.current[orderId]);
+      delete undoQueueRef.current[orderId];
+    }
+
+    setUndoQueueState((prev) => ({ ...prev, [orderId]: actionLabel }));
+
+    const timeout = setTimeout(async () => {
+      if (!undoQueueRef.current[orderId]) return;
+      delete undoQueueRef.current[orderId];
+      setUndoQueueState((prev) => {
+        const next = { ...prev };
+        delete next[orderId];
+        return next;
+      });
+
+      await actionFn();
+    }, 5000);
+
+    undoQueueRef.current[orderId] = timeout;
+  }, []);
+
+
 
   useEffect(() => {
     async function init() {
@@ -303,6 +317,21 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     });
   };
 
+  const updateProductQuantityInCart = (product: Product, newQty: number) => {
+    setCart((prev) => {
+      const idx = prev.findIndex((c) => c.product.id === product.id);
+      if (newQty <= 0) {
+        return prev.filter((c) => c.product.id !== product.id);
+      }
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: newQty };
+        return next;
+      }
+      return [...prev, { product, quantity: newQty, selected_variants: [], notes: "", unit_price: product.base_price }];
+    });
+  };
+
   const setCartQty = (index: number, qty: number) => {
     if (qty <= 0) {
       setCart((prev) => prev.filter((_, i) => i !== index));
@@ -363,10 +392,12 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       const qn = await generateQueueNumber(tenant.id);
       const isPayNow = mode === "pay_now";
 
+      const notesWithCustomerName = buildCustomerNotes(customerNotes, false, [], customerName.trim());
       const created = await createOrder(
         {
           tenant_id: tenant.id,
           queue_number: qn,
+          customer_name: customerName.trim() || undefined,
           table_number: isTableMode ? cleanTableNum : undefined,
           order_type: orderType,
           subtotal: cartSubtotal,
@@ -374,7 +405,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           service_charge_amount: cartSvc,
           takeaway_fee_amount: cartTkwy,
           total_amount: cartTotal,
-          customer_notes: customerNotes || undefined,
+          customer_notes: notesWithCustomerName || undefined,
           created_by_cashier: true,
           cashier_profile_id: profile.id,
           finance_snapshot: {
@@ -397,6 +428,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
       setCart([]);
       setTableNumber("");
+      setCustomerName("");
       setCustomerNotes("");
       setOrderType("dine_in");
       setNewOrderDrawer(false);
@@ -468,6 +500,36 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     [cancelCountdownAction, startCountdownAction, tenant, refreshOrders]
   );
 
+  const handleMarkOrderReady = useCallback(
+    async (order: Order) => {
+      const allItemIds = order.items
+        ? (order.items.map((it) => it.id).filter(Boolean) as string[])
+        : [];
+      const { cleanNotes, isServed } = parseCustomerNotes(order.customer_notes);
+      const newNotes = buildCustomerNotes(cleanNotes, isServed, allItemIds);
+      const previousNotes = order.customer_notes;
+
+      // Optimistically mark all items as cooked in local state
+      setOrders((prev) =>
+        prev.map((o) => (o.id === order.id ? { ...o, customer_notes: newNotes } : o))
+      );
+
+      startCountdownAction(order.id, "Tandai Siap", async () => {
+        try {
+          if (allItemIds.length > 0) {
+            await updateOrderCookedItems(order.id, previousNotes, allItemIds);
+          }
+          await updateOrderStatus(order.id, "ready");
+          if (tenant) refreshOrders(tenant.id);
+        } catch (err) {
+          console.error("Failed to mark order ready in cashier:", err);
+          if (tenant) refreshOrders(tenant.id);
+        }
+      });
+    },
+    [startCountdownAction, tenant, refreshOrders]
+  );
+
   // ──────────────────────────── Filtered product list ───────────────────────────────
   const visibleProducts = products.filter((p) => {
     const matchCat = selectedCat ? p.category_id === selectedCat : true;
@@ -482,26 +544,34 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     {
       title: "Antrian / Meja",
       width: 140,
-      render: (_: unknown, r: Order) => (
-        <div className="flex flex-col gap-1">
-          <span className="font-black text-2xl leading-none" style={{ color: "var(--tenant-primary)" }}>
-            #{r.queue_number}
-          </span>
-          {r.table_number && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 w-fit">
-              🪑 Meja {r.table_number}
+      render: (_: unknown, r: Order) => {
+        const { customerName } = parseCustomerNotes(r.customer_notes, r.customer_name);
+        return (
+          <div className="flex flex-col gap-1">
+            <span className="font-black text-2xl leading-none" style={{ color: "var(--tenant-primary)" }}>
+              #{r.queue_number}
             </span>
-          )}
-          <div className="flex gap-1 flex-wrap">
-            <span className={`text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-wider rounded w-fit ${r.created_by_cashier ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600"}`}>
-              {r.created_by_cashier ? "KASIR" : "KIOSK"}
-            </span>
-            <span className={`text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-wider rounded w-fit ${r.order_type === "takeaway" ? "bg-orange-100 text-orange-700" : "bg-teal-100 text-teal-700"}`}>
-              {r.order_type === "takeaway" ? "TAKEAWAY" : "DINE-IN"}
-            </span>
+            {customerName && (
+              <span className="text-xs font-bold text-gray-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md w-fit flex items-center gap-1">
+                👤 {customerName}
+              </span>
+            )}
+            {r.table_number && (
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 w-fit">
+                🪑 Meja {r.table_number}
+              </span>
+            )}
+            <div className="flex gap-1 flex-wrap">
+              <span className={`text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-wider rounded w-fit ${r.created_by_cashier ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600"}`}>
+                {r.created_by_cashier ? "KASIR" : "KIOSK"}
+              </span>
+              <span className={`text-[10px] px-1.5 py-0.5 font-bold uppercase tracking-wider rounded w-fit ${r.order_type === "takeaway" ? "bg-orange-100 text-orange-700" : "bg-teal-100 text-teal-700"}`}>
+                {r.order_type === "takeaway" ? "TAKEAWAY" : "DINE-IN"}
+              </span>
+            </div>
           </div>
-        </div>
-      ),
+        );
+      },
     },
     {
       title: "Item Pesanan",
@@ -639,12 +709,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 <Button
                   size="small"
                   style={{ background: "#3b82f6", color: "#fff", border: "none" }}
-                  onClick={() =>
-                    startCountdownAction(r.id, "Tandai Siap", async () => {
-                      await updateOrderStatus(r.id, "ready");
-                      if (tenant) refreshOrders(tenant.id);
-                    })
-                  }
+                  onClick={() => handleMarkOrderReady(r)}
                 >
                   ✅ Tandai Siap
                 </Button>
@@ -1325,8 +1390,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       <Drawer
         title={null}
         placement="right"
-        size="large"
-        style={{ width: "100%" }}
+        width={drawerWidth}
         open={newOrderDrawer}
         onClose={() => {
           setNewOrderDrawer(false);
@@ -1377,8 +1441,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 type="button"
                 onClick={() => setPosMobileTab("menu")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${posMobileTab === "menu"
-                    ? "bg-white text-gray-900 shadow-2xs"
-                    : "text-gray-500 hover:text-gray-700"
+                  ? "bg-white text-gray-900 shadow-2xs"
+                  : "text-gray-500 hover:text-gray-700"
                   }`}
               >
                 🍽️ Menu ({visibleProducts.length})
@@ -1387,8 +1451,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 type="button"
                 onClick={() => setPosMobileTab("cart")}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all relative ${posMobileTab === "cart"
-                    ? "bg-white text-gray-900 shadow-2xs"
-                    : "text-gray-500 hover:text-gray-700"
+                  ? "bg-white text-gray-900 shadow-2xs"
+                  : "text-gray-500 hover:text-gray-700"
                   }`}
               >
                 🛒 Cart ({cart.reduce((s, c) => s + c.quantity, 0)})
@@ -1422,7 +1486,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
             {/* ── LEFT: Product Catalog Panel (Menu) ── */}
             <div
-              className={`flex-col md:flex md:w-[60%] lg:w-[64%] xl:w-[66%] min-w-0 border-r bg-gray-50/70 h-full ${posMobileTab === "menu" ? "flex flex-1" : "hidden md:flex"
+              className={`flex-col md:flex md:w-[54%] lg:w-[55%] xl:w-[56%] min-w-0 border-r bg-gray-50/70 h-full ${posMobileTab === "menu" ? "flex flex-1" : "hidden md:flex"
                 }`}
             >
               {/* Search & Category Filter Header */}
@@ -1495,15 +1559,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 )}
               </div>
 
-              {/* Product Grid Area */}
-              <div
-                className="flex-1 overflow-y-auto p-3 sm:p-4 content-start"
-                style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))",
-                }}
-              >
+              {/* Product Grid Area (Powered by Reusable ProductCard - Cashier Mode) */}
+              <div className="flex-1 overflow-y-auto p-3 sm:p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 content-start">
                 {visibleProducts.length === 0 && (
                   <div className="col-span-full py-20 flex flex-col items-center justify-center text-gray-400">
                     <span className="text-5xl mb-3">🍽️</span>
@@ -1517,65 +1574,15 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     .reduce((s, c) => s + c.quantity, 0);
 
                   return (
-                    <motion.div
+                    <ProductCard
                       key={p.id}
-                      whileTap={{ scale: 0.96 }}
-                      onClick={() => addToCart(p)}
-                      className="relative text-left rounded-2xl overflow-hidden border bg-white hover:shadow-md transition-all flex flex-col cursor-pointer select-none group"
-                      style={{
-                        borderColor: inCartCount > 0 ? "var(--tenant-primary)" : "#e2e8f0",
-                        boxShadow: inCartCount > 0 ? "0 0 0 2px rgba(99,102,241,.2)" : undefined,
-                      }}
-                    >
-                      {/* Quantity badge */}
-                      {inCartCount > 0 && (
-                        <span
-                          className="absolute top-2 right-2 z-10 min-w-[22px] h-[22px] px-1.5 rounded-full text-white text-[11px] font-extrabold flex items-center justify-center shadow-md"
-                          style={{ background: "var(--tenant-primary)" }}
-                        >
-                          {inCartCount}×
-                        </span>
-                      )}
-
-                      {/* Product Image */}
-                      <div className="w-full flex-shrink-0 flex items-center justify-center bg-gray-50 relative overflow-hidden" style={{ height: 95 }}>
-                        {p.image_urls[0] ? (
-                          <img
-                            src={p.image_urls[0]}
-                            alt={p.name}
-                            className="w-full h-full object-contain p-1.5 group-hover:scale-105 transition-transform"
-                          />
-                        ) : (
-                          <span className="text-3xl">🍽️</span>
-                        )}
-                      </div>
-
-                      {/* Info & Price */}
-                      <div className="p-2.5 flex flex-col justify-between flex-1 min-w-0">
-                        <div style={{ minHeight: "2.4em" }}>
-                          <p className="font-semibold text-xs leading-snug text-gray-800 break-words line-clamp-2" title={p.name}>
-                            {p.name}
-                          </p>
-                        </div>
-                        <div className="mt-2 flex items-center justify-between gap-1 border-t pt-1.5">
-                          <p className="text-xs font-black truncate" style={{ color: "var(--tenant-primary)" }}>
-                            Rp {Number(p.base_price).toLocaleString("id-ID")}
-                          </p>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              addToCart(p);
-                            }}
-                            className="w-6 h-6 rounded-lg text-white font-bold text-sm flex items-center justify-center shadow-2xs active:scale-90 transition-transform"
-                            style={{ background: "var(--tenant-primary)" }}
-                            title="Tambah item"
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
-                    </motion.div>
+                      product={p}
+                      role="cashier"
+                      quantity={inCartCount}
+                      primaryColor="var(--tenant-primary)"
+                      onAddToCart={addToCart}
+                      onUpdateQuantity={updateProductQuantityInCart}
+                    />
                   );
                 })}
               </div>
@@ -1603,7 +1610,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
             {/* ── RIGHT: Order Details & Cart Panel ── */}
             <div
-              className={`flex-col md:flex md:w-[40%] lg:w-[36%] xl:w-[34%] min-w-0 bg-white h-full ${posMobileTab === "cart" ? "flex flex-1" : "hidden md:flex"
+              className={`flex-col md:flex md:w-[46%] lg:w-[45%] xl:w-[44%] min-w-[340px] bg-white h-full ${posMobileTab === "cart" ? "flex flex-1" : "hidden md:flex"
                 }`}
             >
               {/* Cart Header (Mobile Back Button + Title) */}
@@ -1625,29 +1632,28 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 </span>
               </div>
 
-              {/* Order Settings Section (Type + Table + Notes) */}
-              <div className="p-3.5 sm:p-4 border-b space-y-3 bg-white flex-shrink-0">
-                {/* Order Type Toggle */}
-                <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-1.5">
-                    Tipe Pesanan
+              {/* Order Settings Section (Compact 2-Column Layout) */}
+              <div className="p-3 border-b space-y-2 bg-white flex-shrink-0">
+                {/* Row 1: Order Type Toggle */}
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-gray-500 flex-shrink-0">
+                    Tipe:
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-1.5 flex-1">
                     {(["dine_in", "takeaway"] as const).map((t) => (
                       <button
                         key={t}
                         type="button"
                         onClick={() => setOrderType(t)}
-                        className="py-2.5 rounded-xl text-xs font-bold border transition-all flex items-center justify-center gap-1.5 shadow-2xs"
+                        className="py-1.5 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-1 shadow-2xs cursor-pointer"
                         style={
                           orderType === t
                             ? {
                               background: "var(--tenant-primary)",
                               color: "#fff",
                               border: "1.5px solid var(--tenant-primary)",
-                              boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
                             }
-                            : { background: "#fff", color: "#64748b", border: "1.5px solid #e2e8f0" }
+                            : { background: "#f8fafc", color: "#64748b", border: "1.5px solid #e2e8f0" }
                         }
                       >
                         <span>{t === "dine_in" ? "🍽️" : "🛍️"}</span>
@@ -1657,32 +1663,51 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   </div>
                 </div>
 
-                {/* Table Number Input */}
-                {bl?.numbering === "table" && orderType !== "takeaway" && (
+                {/* Row 2: 2-Column Grid for Customer Name & Table Number */}
+                <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-1">
-                      Nomor Meja <span className="text-rose-500">*</span>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                      👤 Pemesan {orderType === "dine_in" ? <span className="text-gray-400 font-normal lowercase">(opt)</span> : <span className="text-rose-500">*</span>}
                     </label>
                     <input
-                      value={tableNumber}
-                      onChange={(e) => setTableNumber(e.target.value)}
-                      placeholder="Contoh: 05 atau Meja 12"
-                      className="w-full text-sm px-3 py-2 border rounded-xl bg-gray-50 outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 transition-all font-semibold"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      placeholder="Nama panggilan..."
+                      className="w-full text-xs font-semibold px-2.5 py-1.5 border rounded-lg bg-gray-50/80 outline-none focus:bg-white focus:border-indigo-500 transition-all text-gray-900"
                     />
                   </div>
-                )}
 
-                {/* General Customer Notes */}
+                  {bl?.numbering === "table" && orderType !== "takeaway" ? (
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                        🪑 No. Meja <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        value={tableNumber}
+                        onChange={(e) => setTableNumber(e.target.value)}
+                        placeholder="Contoh: 05..."
+                        className="w-full text-xs font-semibold px-2.5 py-1.5 border rounded-lg bg-gray-50/80 outline-none focus:bg-white focus:border-indigo-500 transition-all text-gray-900"
+                      />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                        📦 Detail
+                      </label>
+                      <div className="text-xs font-bold text-orange-600 bg-orange-50 border border-orange-200 px-2.5 py-1.5 rounded-lg text-center">
+                        Bawa Pulang
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Row 3: Compact 1-line Customer Notes */}
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-1">
-                    Catatan Pesanan (Opsional)
-                  </label>
-                  <textarea
+                  <input
                     value={customerNotes}
                     onChange={(e) => setCustomerNotes(e.target.value)}
-                    placeholder="Minta cepat, bungkus terpisah, dll..."
-                    rows={2}
-                    className="w-full text-xs px-3 py-2 border rounded-xl bg-gray-50 outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 transition-all resize-none"
+                    placeholder="📝 Catatan pesanan (opsional)..."
+                    className="w-full text-xs px-2.5 py-1.5 border rounded-lg bg-gray-50/80 outline-none focus:bg-white focus:border-indigo-500 transition-all text-gray-900 placeholder-gray-400"
                   />
                 </div>
               </div>
@@ -1699,46 +1724,52 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   </div>
                 )}
                 {cart.map((item, i) => (
-                  <div key={i} className="bg-white rounded-2xl p-3 border border-gray-100 shadow-2xs space-y-2">
-                    <div className="flex items-start justify-between gap-2">
+                  <div key={i} className="bg-white rounded-2xl p-3.5 border border-gray-200/80 shadow-2xs space-y-2.5">
+                    {/* Row 1: Image + Title + Unit Price + Delete Button */}
+                    <div className="flex items-start justify-between gap-2.5">
                       <div className="flex items-start gap-2.5 flex-1 min-w-0">
                         {item.product.image_urls[0] ? (
-                          <div className="w-11 h-11 flex-shrink-0 rounded-xl overflow-hidden bg-gray-50 border flex items-center justify-center">
+                          <div className="w-12 h-12 flex-shrink-0 rounded-xl overflow-hidden bg-gray-50 border flex items-center justify-center">
                             <img src={item.product.image_urls[0]} alt={item.product.name} className="w-full h-full object-contain p-0.5" />
                           </div>
                         ) : (
-                          <div className="w-11 h-11 flex-shrink-0 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-lg font-bold">
+                          <div className="w-12 h-12 flex-shrink-0 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl font-bold">
                             🍽️
                           </div>
                         )}
                         <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-xs leading-tight text-gray-800 line-clamp-2">
+                          <p className="font-bold text-xs leading-tight text-gray-900 line-clamp-2">
                             {item.product.name}
                           </p>
-                          <p className="text-[11px] font-bold mt-0.5" style={{ color: "var(--tenant-primary)" }}>
-                            Rp {item.unit_price.toLocaleString("id-ID")}
+                          <p className="text-[11px] font-semibold text-gray-500 mt-0.5">
+                            @ Rp {item.unit_price.toLocaleString("id-ID")}
                           </p>
                         </div>
                       </div>
-                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                        <p className="text-xs font-black text-gray-900">
-                          Rp {(item.unit_price * item.quantity).toLocaleString("id-ID")}
-                        </p>
-                        <button
-                          onClick={() => setCart((prev) => prev.filter((_, idx) => idx !== i))}
-                          className="text-rose-500 hover:text-rose-700 text-[10px] font-bold bg-rose-50 hover:bg-rose-100 px-2 py-0.5 rounded-lg transition-colors"
-                        >
-                          Hapus
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCart((prev) => prev.filter((_, idx) => idx !== i))}
+                        className="text-rose-500 hover:text-rose-700 text-[11px] font-bold bg-rose-50 hover:bg-rose-100 px-2.5 py-1 rounded-lg transition-colors flex-shrink-0"
+                      >
+                        Hapus
+                      </button>
                     </div>
 
-                    {/* Stepper + Item Notes */}
-                    <div className="flex items-center gap-2 pt-1 border-t border-gray-50">
-                      <div className="flex items-center gap-1.5 bg-gray-100 border border-gray-200 rounded-xl p-1">
+                    {/* Row 2: Subtotal & Stepper */}
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[11px] text-gray-400 font-medium">Total:</span>
+                        <span className="text-xs font-black text-gray-900">
+                          Rp {(item.unit_price * item.quantity).toLocaleString("id-ID")}
+                        </span>
+                      </div>
+
+                      {/* Stepper */}
+                      <div className="flex items-center gap-1 bg-gray-100 border border-gray-200 rounded-xl p-1">
                         <button
+                          type="button"
                           onClick={() => setCartQty(i, item.quantity - 1)}
-                          className="w-6 h-6 rounded-lg bg-white hover:bg-gray-200 flex items-center justify-center font-bold text-gray-700 text-sm leading-none shadow-2xs"
+                          className="w-7 h-7 rounded-lg bg-white hover:bg-gray-200 flex items-center justify-center font-black text-gray-700 text-sm leading-none shadow-2xs"
                         >
                           −
                         </button>
@@ -1746,21 +1777,26 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                           type="number"
                           value={item.quantity}
                           onChange={(e) => setCartQty(i, parseInt(e.target.value) || 1)}
-                          className="w-7 text-center text-xs font-black bg-transparent outline-none"
+                          className="w-8 text-center text-xs font-black bg-transparent outline-none"
                         />
                         <button
+                          type="button"
                           onClick={() => setCartQty(i, item.quantity + 1)}
-                          className="w-6 h-6 rounded-lg text-white flex items-center justify-center font-bold text-sm leading-none shadow-2xs"
+                          className="w-7 h-7 rounded-lg text-white flex items-center justify-center font-black text-sm leading-none shadow-2xs"
                           style={{ background: "var(--tenant-primary)" }}
                         >
                           +
                         </button>
                       </div>
+                    </div>
+
+                    {/* Row 3: Item Notes Input (Full width) */}
+                    <div>
                       <input
                         value={item.notes || ""}
                         onChange={(e) => setCartNotes(i, e.target.value)}
-                        placeholder="Catatan item (pedas, es, dsb)"
-                        className="flex-1 text-xs px-2.5 py-1.5 bg-gray-50 border rounded-xl outline-none focus:bg-white focus:border-indigo-500 transition-colors placeholder-gray-400"
+                        placeholder="Catatan item (contoh: pedas, es sedikit, dll)..."
+                        className="w-full text-xs px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 transition-colors placeholder-gray-400 font-medium"
                       />
                     </div>
                   </div>
@@ -1802,36 +1838,36 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   </div>
                 )}
 
-                {/* Dual Submit Buttons */}
-                <div className="flex gap-2 w-full">
-                  <button
-                    type="button"
-                    onClick={() => handleCreateCashierOrder("save_pending")}
-                    disabled={cart.length === 0 || submitting["createOrder"]}
-                    className="px-3.5 py-3 rounded-2xl font-bold text-xs border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs"
-                  >
-                    📋 Simpan Menunggu
-                  </button>
+                {/* Dual Submit Buttons (Stacked for max legibility & zero text wrapping) */}
+                <div className="space-y-2 w-full">
                   <button
                     type="button"
                     onClick={() => handleCreateCashierOrder("pay_now")}
                     disabled={cart.length === 0 || submitting["createOrder"]}
-                    className="flex-1 py-3 rounded-2xl font-bold text-white text-sm transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed shadow-md flex items-center justify-center gap-1.5"
+                    className="w-full py-3.5 px-4 rounded-xl font-bold text-white text-sm transition-all shadow-md flex items-center justify-between active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                     style={{
                       background: cart.length > 0 && !submitting["createOrder"] ? "var(--tenant-primary)" : "#94a3b8",
                     }}
                   >
-                    {submitting["createOrder"] ? (
-                      "Memproses..."
-                    ) : cart.length === 0 ? (
-                      "Pilih Menu Terlebih Dahulu"
-                    ) : (
-                      <>
-                        <span>💳</span>
-                        <span>Bayar &amp; Masuk Dapur</span>
-                        <span className="font-black">· Rp {cartTotal.toLocaleString("id-ID")}</span>
-                      </>
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">💳</span>
+                      <span>Bayar &amp; Masuk Dapur</span>
+                    </div>
+                    {cart.length > 0 && (
+                      <span className="text-sm font-extrabold bg-white/20 px-2.5 py-0.5 rounded-lg backdrop-blur-xs">
+                        Rp {cartTotal.toLocaleString("id-ID")}
+                      </span>
                     )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleCreateCashierOrder("save_pending")}
+                    disabled={cart.length === 0 || submitting["createOrder"]}
+                    className="w-full py-2.5 px-4 rounded-xl font-bold text-xs border border-gray-200 text-gray-700 bg-gray-50 hover:bg-gray-100 transition-all active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <span>⏳</span>
+                    <span>Simpan ke Waiting List (Menunggu)</span>
                   </button>
                 </div>
               </div>

@@ -487,7 +487,7 @@ interface OrderCardProps {
 }
 
 function OrderCard({ order, type, loading, isUndoing, onServe, onUndo }: OrderCardProps) {
-  const { cleanNotes, isServed, cookedItemIds } = parseCustomerNotes(order.customer_notes);
+  const { cleanNotes, isServed, cookedItemIds, customerName } = parseCustomerNotes(order.customer_notes, order.customer_name);
 
   const totalItems = order.items?.length ?? 0;
   const cookedCount = order.items?.filter((it) => it.id && cookedItemIds.includes(it.id)).length ?? 0;
@@ -524,18 +524,25 @@ function OrderCard({ order, type, loading, isUndoing, onServe, onUndo }: OrderCa
         {/* Header: Queue Number and Tags */}
         <div className="flex items-start justify-between border-b border-slate-700/60 pb-3">
           <div>
-            <span
-              className="text-2xl font-black leading-none"
-              style={{ color: "var(--tenant-primary, #6366f1)" }}
-            >
-              #{order.queue_number}
-            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span
+                className="text-2xl font-black leading-none"
+                style={{ color: "var(--tenant-primary, #6366f1)" }}
+              >
+                #{order.queue_number}
+              </span>
+              {customerName && (
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  👤 {customerName}
+                </span>
+              )}
+            </div>
             {order.table_number ? (
-              <span className="ml-2.5 text-xs font-bold px-2 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400">
+              <span className="inline-block mt-1.5 text-xs font-bold px-2 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400">
                 🪑 Meja {order.table_number}
               </span>
             ) : (
-              <span className="ml-2.5 text-xs font-bold px-2 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-400">
+              <span className="inline-block mt-1.5 text-xs font-bold px-2 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-400">
                 🥡 Takeaway
               </span>
             )}
@@ -648,22 +655,7 @@ function OrderCard({ order, type, loading, isUndoing, onServe, onUndo }: OrderCa
               </button>
             )}
 
-            {/* Undo button for completed orders */}
-            {type === "completed" && (
-              <button
-                onClick={() => onUndo(order)}
-                disabled={loading}
-                className="w-full py-1.5 border border-slate-700 hover:border-slate-650 bg-slate-800/40 hover:bg-slate-800 text-amber-300 hover:text-amber-200 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center justify-center gap-1.5"
-              >
-                {loading ? (
-                  <span className="w-4 h-4 border-2 border-amber-300/30 border-t-amber-300 rounded-full animate-spin" />
-                ) : (
-                  <>
-                    <span>↩️</span> Tarik Kembali (Urungkan)
-                  </>
-                )}
-              </button>
-            )}
+
           </div>
         )}
       </div>

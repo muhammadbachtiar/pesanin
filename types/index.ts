@@ -164,6 +164,7 @@ export interface Order {
     payment_method: PaymentMethodType | null;
     selected_manual_channel_id: string | null;
     gateway_transaction_id: string | null;
+    customer_name?: string | null;
     customer_notes: string | null;
     verified_by: string | null;
     verified_at: string | null;

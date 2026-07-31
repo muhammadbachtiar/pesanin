@@ -394,12 +394,22 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
                       {/* Card Header */}
                       <div className="flex items-start justify-between border-b border-slate-700/80 pb-3">
                         <div>
-                          <span
-                            className="text-3xl font-black leading-none"
-                            style={{ color: "var(--tenant-primary, #6366f1)" }}
-                          >
-                            #{order.queue_number}
-                          </span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className="text-3xl font-black leading-none"
+                              style={{ color: "var(--tenant-primary, #6366f1)" }}
+                            >
+                              #{order.queue_number}
+                            </span>
+                            {(() => {
+                              const { customerName } = parseCustomerNotes(order.customer_notes, order.customer_name);
+                              return customerName ? (
+                                <span className="text-xs font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                  👤 {customerName}
+                                </span>
+                              ) : null;
+                            })()}
+                          </div>
                           {order.table_number && (
                             <p
                               className="mt-1.5 text-xs font-bold px-2 py-0.5 rounded w-fit border"
