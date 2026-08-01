@@ -541,15 +541,15 @@ export default function KioskPage({
                   </div>
                   <div className="flex flex-col sm:flex-row gap-3">
                     <div className="flex items-center gap-2">
-                        <button onClick={() => updateCartItemQuantity(i, item.quantity - 1)} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-lg">-</button>
-                        <input type="number" value={item.quantity === 0 ? "" : item.quantity} onChange={(e) => updateCartItemQuantity(i, parseInt(e.target.value) || 0)} className="w-12 text-center bg-gray-50 border rounded-lg py-1.5 text-sm font-bold" />
-                        <button onClick={() => updateCartItemQuantity(i, item.quantity + 1)} className="w-9 h-9 rounded-full text-white flex items-center justify-center font-bold text-lg" style={{ background: "var(--tenant-primary)" }}>+</button>
+                      <button onClick={() => updateCartItemQuantity(i, item.quantity - 1)} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-lg">-</button>
+                      <input type="number" value={item.quantity === 0 ? "" : item.quantity} onChange={(e) => updateCartItemQuantity(i, parseInt(e.target.value) || 0)} className="w-12 text-center bg-gray-50 border rounded-lg py-1.5 text-sm font-bold" />
+                      <button onClick={() => updateCartItemQuantity(i, item.quantity + 1)} className="w-9 h-9 rounded-full text-white flex items-center justify-center font-bold text-lg" style={{ background: "var(--tenant-primary)" }}>+</button>
                     </div>
-                    <input 
-                        value={item.notes || ""} 
-                        onChange={(e) => updateCartItemNotes(i, e.target.value)} 
-                        placeholder="Tulis Opsional (Minta Pedas, dsb...)" 
-                        className="flex-1 text-sm p-2 bg-gray-50 border border-gray-100 rounded-xl outline-none focus:border-[var(--tenant-primary)] placeholder-gray-400"
+                    <input
+                      value={item.notes || ""}
+                      onChange={(e) => updateCartItemNotes(i, e.target.value)}
+                      placeholder="Tulis Opsional (Minta Pedas, dsb...)"
+                      className="flex-1 text-sm p-2 bg-gray-50 border border-gray-100 rounded-xl outline-none focus:border-[var(--tenant-primary)] placeholder-gray-400"
                     />
                   </div>
                 </div>
@@ -570,47 +570,49 @@ export default function KioskPage({
           </motion.div>
         )}
 
-        {/* DEDICATED CUSTOMER & TABLE INFO SCREEN */}
+        {/* DEDICATED CUSTOMER & TABLE INFO SCREEN (Fun & Engaging Kiosk Style) */}
         {(screen === "customer_info" || screen === "table_input") && (
           <motion.div
             key="customer_info"
             className="fixed inset-0 flex flex-col justify-between p-6 bg-slate-50 z-40 overflow-y-auto"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ duration: 0.25 }}
           >
-            <div className="max-w-md w-full mx-auto space-y-6 my-auto pt-6">
-              
-              {/* Header */}
-              <div className="text-center space-y-2">
-                <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center justify-center text-3xl mx-auto shadow-sm">
-                  👤
+            <div className="max-w-md w-full mx-auto space-y-6 my-auto pt-4 pb-6">
+
+              {/* Fun Header */}
+              <div className="text-center space-y-3">
+                <div>
+                  <h2 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+                    Sedikit Lagi!
+                  </h2>
+                  <p className="text-gray-500 text-sm font-medium leading-relaxed mt-1 max-w-xs mx-auto">
+                    {orderType === "takeaway"
+                      ? "Siapa nama kamu? Nanti kami panggil pas pesanannya siap!"
+                      : bl.numbering === "table"
+                        ? "Biar pesananmu sampai tepat ke mejamu, yuk isi nomor meja & nama kamu!"
+                        : "Biar kami tahu siapa kamu, sebutkan nama panggilanmu ya!"}
+                  </p>
                 </div>
-                <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">
-                  Informasi Pemesan
-                </h2>
-                <p className="text-gray-500 text-sm leading-relaxed">
-                  {orderType === "takeaway"
-                    ? "Masukkan nama panggilan Anda untuk dipanggil saat pesanan siap."
-                    : bl.numbering === "table"
-                    ? "Masukkan nama panggilan & nomor meja tempat Anda duduk."
-                    : "Masukkan nama panggilan Anda untuk identitas pesanan."}
-                </p>
               </div>
 
               {/* Input Cards Container */}
               <div className="space-y-4">
-                
-                {/* 1. Nomor Meja Field (POSITIONED ON TOP if Dine-In and tenant uses Table Numbering) */}
+
+                {/* 1. Nomor Meja Field (Dine-In Table Mode) */}
                 {bl.numbering === "table" && orderType !== "takeaway" && (
-                  <div className="bg-white p-5 rounded-2xl border border-gray-200/80 shadow-xs space-y-2">
+                  <div className="bg-white p-5 rounded-2xl border border-gray-200/90 shadow-sm space-y-2.5 hover:shadow-md transition-shadow">
                     <div className="flex justify-between items-center">
-                      <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">
-                        Nomor Meja Anda <span className="text-rose-500">*</span>
+                      <label className="block text-xs font-black uppercase tracking-wider text-gray-700 flex items-center gap-1.5">
+                        <span>🪑</span>
+                        <span>Nomor Meja Kamu</span>
+                        <span className="text-rose-500 font-bold">*</span>
                       </label>
                       {tableRecord && (
-                        <span className="text-[10px] font-extrabold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                          ✓ Dari QR Meja {tableRecord.table_number}
+                        <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-300">
+                          ✨ QR Meja {tableRecord.table_number}
                         </span>
                       )}
                     </div>
@@ -624,19 +626,25 @@ export default function KioskPage({
                         }
                       }}
                       disabled={!!tableRecord}
-                      placeholder="Contoh: 05 atau Meja 12"
-                      className="w-full text-base font-bold px-4 py-3 border border-gray-200 rounded-xl bg-gray-50/50 outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all text-gray-900 disabled:opacity-75 disabled:bg-gray-100"
+                      placeholder="Misal: 05 atau Meja 12"
+                      className="w-full text-lg font-black px-4 py-3.5 border-2 border-gray-200 rounded-xl bg-gray-50/60 outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all text-gray-900 disabled:opacity-75 disabled:bg-gray-100"
                     />
-                    <p className="text-[11px] text-gray-400 font-medium">
-                      Nomor meja yang tertera pada stiker meja tempat Anda duduk.
+                    <p className="text-[11px] text-gray-400 font-semibold flex items-center gap-1">
+                      <span>💡</span> Coba ambil nomor meja yang tersedia atau lihat angka di sudut mejamu ya!
                     </p>
                   </div>
                 )}
 
-                {/* 2. Nama Pemesan Field (OPTIONAL for Dine-In Table orders) */}
-                <div className="bg-white p-5 rounded-2xl border border-gray-200/80 shadow-xs space-y-2">
-                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-600">
-                    Nama Panggilan Anda {bl.numbering === "table" && orderType !== "takeaway" ? <span className="text-gray-400 font-normal lowercase">(opsional)</span> : <span className="text-rose-500">*</span>}
+                {/* 2. Nama Pemesan Field */}
+                <div className="bg-white p-5 rounded-2xl border border-gray-200/90 shadow-sm space-y-2.5 hover:shadow-md transition-shadow">
+                  <label className="block text-xs font-black uppercase tracking-wider text-gray-700 flex items-center gap-1.5">
+                    <span>🏷️</span>
+                    <span>Nama Panggilan Kamu</span>
+                    {bl.numbering === "table" && orderType !== "takeaway" ? (
+                      <span className="text-gray-400 font-normal lowercase">(opsional)</span>
+                    ) : (
+                      <span className="text-rose-500 font-bold">*</span>
+                    )}
                   </label>
                   <input
                     type="text"
@@ -645,25 +653,29 @@ export default function KioskPage({
                       setCustomerName(e.target.value);
                       setTableInputError(null);
                     }}
-                    placeholder="Contoh: Budi, Kak Siti, dsb..."
-                    className="w-full text-base font-bold px-4 py-3 border border-gray-200 rounded-xl bg-gray-50/50 outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all text-gray-900"
+                    placeholder="Misal: Budi, Kak Siti, Bro Alif..."
+                    className="w-full text-lg font-black px-4 py-3.5 border-2 border-gray-200 rounded-xl bg-gray-50/60 outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all text-gray-900"
                   />
-                  <p className="text-[11px] text-gray-400 font-medium">
-                    Nama panggilan Anda untuk memudahkan panggilan atau pencatatan.
+                  <p className="text-[11px] text-gray-400 font-semibold flex items-center gap-1">
+                    <span>🙌</span> Biar ramah pas kami panggil atau antarkan pesananmu!
                   </p>
                 </div>
 
                 {/* Error Banner */}
                 {tableInputError && (
-                  <div className="p-3.5 rounded-xl border border-rose-200 bg-rose-50 text-rose-800 text-xs font-semibold flex items-center gap-2">
-                    <span>⚠️</span>
+                  <motion.div
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="p-4 rounded-2xl border-2 border-rose-200 bg-rose-50 text-rose-900 text-xs font-bold flex items-center gap-2.5 shadow-sm"
+                  >
+                    <span className="text-lg">🙈</span>
                     <span>{tableInputError}</span>
-                  </div>
+                  </motion.div>
                 )}
 
               </div>
 
-              {/* Navigation Actions */}
+              {/* Fun Navigation Actions */}
               <div className="pt-2 flex flex-col gap-3">
                 <button
                   type="button"
@@ -675,7 +687,7 @@ export default function KioskPage({
 
                     if (isTableRequired) {
                       if (!targetTableNum) {
-                        setTableInputError("Nomor meja wajib diisi untuk pesanan Makan di Sini!");
+                        setTableInputError("Nomor mejamu belum diisi nih! Isi dulu yuk 😉");
                         return;
                       }
                       if (tenant && !tableRecord) {
@@ -683,15 +695,13 @@ export default function KioskPage({
                         const activeExisting = await getActiveOrderByTable(tenant.id, targetTableNum);
                         setIsCheckingTable(false);
                         if (activeExisting) {
-                          setTableInputError(`⚠️ Meja "${targetTableNum}" sedang terisi oleh pesanan yang belum selesai. Harap pilih nomor meja lain!`);
+                          setTableInputError(`Wah, Meja "${targetTableNum}" sedang terisi pesanan lain nih. Pilih nomor meja lain ya! 🪑`);
                           return;
                         }
                       }
-                      // Name is OPTIONAL for Table Mode!
                     } else {
-                      // Takeaway or Queue Mode -> Name is Required for calling out
                       if (!trimmedName) {
-                        setTableInputError("Nama panggilan wajib diisi untuk pesanan Bawa Pulang / Antrian!");
+                        setTableInputError("Isi nama panggilanmu dulu ya biar gak tertukar! 😉");
                         return;
                       }
                     }
@@ -699,18 +709,18 @@ export default function KioskPage({
                     setTableInputError(null);
                     setScreen("summary");
                   }}
-                  className="w-full py-4 text-base font-extrabold text-white rounded-xl shadow-lg active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="w-full py-4 text-lg font-black text-white rounded-2xl shadow-xl active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                   style={{ background: "var(--tenant-primary)" }}
                 >
-                  {isCheckingTable ? "Memeriksa..." : "Lanjut ke Konfirmasi Pesanan →"}
+                  {isCheckingTable ? "Memeriksa Meja... ⏳" : "Lanjut Konfirmasi Pesanan"}
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setScreen("cart")}
-                  className="w-full py-3 text-sm font-bold text-gray-500 hover:text-gray-800 transition-colors text-center cursor-pointer"
+                  className="w-full py-2.5 text-xs font-extrabold text-gray-500 hover:text-gray-900 transition-colors text-center cursor-pointer"
                 >
-                  ← Kembali ke Keranjang
+                  ← Cek Keranjang Lagi
                 </button>
               </div>
 
@@ -718,152 +728,165 @@ export default function KioskPage({
           </motion.div>
         )}
 
-        {/* SUMMARY / KONFIRMASI PESANAN (STREAMLINED & SIMPLE) */}
+        {/* SUMMARY / KONFIRMASI PESANAN (Matching customer_info Fun Kiosk Style) */}
         {screen === "summary" && (
           <motion.div
             key="summary"
-            className="min-h-screen flex flex-col bg-slate-50"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
+            className="fixed inset-0 flex flex-col justify-between p-6 bg-slate-50 z-40 overflow-y-auto"
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ duration: 0.25 }}
           >
-            <header
-              className="px-6 py-4 shadow-sm flex items-center justify-between gap-3 text-white"
-              style={{ background: "var(--tenant-primary)" }}
-            >
-              <div className="flex items-center gap-3">
-                <button onClick={() => setScreen("customer_info")} className="text-white text-2xl font-bold cursor-pointer">←</button>
-                <h2 className="text-white font-extrabold text-xl">Konfirmasi Pesanan</h2>
+            <div className="max-w-md w-full mx-auto space-y-5 my-auto pt-4 pb-6">
+
+              {/* Fun Header */}
+              <div className="text-center space-y-3">
+                <div>
+                  <h2 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+                    Cek Pesananmu Dulu!
+                  </h2>
+                  <p className="text-gray-500 text-sm font-medium leading-relaxed mt-1 max-w-xs mx-auto">
+                    Pastikan semua menu pesananmu sudah sesuai!
+                  </p>
+                </div>
               </div>
-              <span className="text-xs bg-white/20 px-3 py-1 rounded-full font-bold">
-                Ringkasan akhir
-              </span>
-            </header>
 
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 max-w-lg w-full mx-auto">
-              
-              {/* Customer & Order Details Card */}
-              <div className="bg-white p-4 rounded-2xl border border-gray-200/80 shadow-2xs space-y-3">
-                <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                  <div className="flex items-center gap-2.5">
-                    <span className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-base">
-                      👤
-                    </span>
-                    <div>
-                      <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Nama Pemesan</p>
-                      <p className="text-sm font-extrabold text-gray-900">{customerName.trim() || "Pelanggan Kiosk"}</p>
+              {/* Cards Container */}
+              <div className="space-y-3.5">
+
+                {/* 1. Customer & Order Details Card */}
+                <div className="bg-white p-5 rounded-2xl border border-gray-200/90 shadow-sm space-y-3 hover:shadow-md transition-shadow">
+                  <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold text-lg border border-amber-200/60">
+                        👤
+                      </span>
+                      <div>
+                        <p className="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider">Pemesan</p>
+                        <p className="text-sm font-black text-gray-900">{customerName.trim() || "Pelanggan Kiosk"}</p>
+                      </div>
                     </div>
+                    <button
+                      onClick={() => setScreen("customer_info")}
+                      className="text-xs text-indigo-600 font-extrabold hover:underline cursor-pointer bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100"
+                    >
+                      Ubah ✏️
+                    </button>
                   </div>
-                  <button
-                    onClick={() => setScreen("customer_info")}
-                    className="text-xs text-indigo-600 font-bold hover:underline cursor-pointer"
-                  >
-                    Ubah
-                  </button>
-                </div>
 
-                <div className="flex items-center justify-between text-xs text-gray-600">
-                  <span>Tipe Pemesanan:</span>
-                  <span className="font-bold text-gray-900 bg-gray-100 px-2.5 py-1 rounded-lg">
-                    {orderType === "dine_in" ? "🍽️ Makan di Sini" : "🛍️ Bawa Pulang"}
-                  </span>
-                </div>
-
-                {(tableRecord || tableInputValue) && orderType !== "takeaway" && (
-                  <div className="flex items-center justify-between text-xs text-gray-600">
-                    <span>Lokasi Meja:</span>
-                    <span className="font-extrabold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100">
-                      🪑 Meja {tableRecord?.display_name ?? tableRecord?.table_number ?? tableInputValue}
+                  <div className="flex items-center justify-between text-xs font-semibold text-gray-600">
+                    <span>Tipe Pemesanan:</span>
+                    <span className="font-bold text-gray-900 bg-gray-100 px-2.5 py-1 rounded-lg">
+                      {orderType === "dine_in" ? "🍽️ Makan di Sini" : "🛍️ Bawa Pulang"}
                     </span>
                   </div>
-                )}
-              </div>
 
-              {/* Items List Card */}
-              <div className="bg-white rounded-2xl border border-gray-200/80 shadow-2xs divide-y divide-gray-100 overflow-hidden">
-                <div className="px-4 py-3 bg-gray-50/70 border-b border-gray-100 flex justify-between items-center">
-                  <span className="text-xs font-extrabold uppercase tracking-wider text-gray-500">Item Pesanan ({cart.reduce((s, c) => s + c.quantity, 0)})</span>
-                  <button onClick={() => setScreen("cart")} className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer">Edit Cart</button>
-                </div>
-                {cart.map((item, i) => (
-                  <div key={i} className="px-4 py-3 flex justify-between items-center">
-                    <div>
-                      <p className="font-bold text-xs text-gray-900">{item.product.name}</p>
-                      <p className="text-[11px] text-gray-500 mt-0.5">×{item.quantity} @ Rp {item.unit_price.toLocaleString("id-ID")}</p>
-                      {item.notes && <p className="text-[11px] text-amber-600 font-medium mt-0.5">📝 {item.notes}</p>}
+                  {(tableRecord || tableInputValue) && orderType !== "takeaway" && (
+                    <div className="flex items-center justify-between text-xs font-semibold text-gray-600">
+                      <span>Lokasi Meja:</span>
+                      <span className="font-extrabold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100">
+                        🪑 Meja {tableRecord?.display_name ?? tableRecord?.table_number ?? tableInputValue}
+                      </span>
                     </div>
-                    <p className="font-extrabold text-xs text-gray-900">
-                      Rp {(item.unit_price * item.quantity).toLocaleString("id-ID")}
-                    </p>
+                  )}
+                </div>
+
+                {/* 2. Items List Card */}
+                <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm divide-y divide-gray-100 overflow-hidden hover:shadow-md transition-shadow">
+                  <div className="px-4 py-3 bg-gray-50/80 border-b border-gray-100 flex justify-between items-center">
+                    <span className="text-xs font-black uppercase tracking-wider text-gray-600 flex items-center gap-1.5">
+                      <span>🛒</span>
+                      <span>Item Pesanan ({cart.reduce((s, c) => s + c.quantity, 0)})</span>
+                    </span>
+                    <button onClick={() => setScreen("cart")} className="text-xs font-extrabold text-indigo-600 hover:underline cursor-pointer">
+                      Edit ✏️
+                    </button>
                   </div>
-                ))}
+                  <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
+                    {cart.map((item, i) => (
+                      <div key={i} className="px-4 py-3 flex justify-between items-center">
+                        <div>
+                          <p className="font-extrabold text-xs text-gray-900">{item.product.name}</p>
+                          <p className="text-[11px] text-gray-500 font-semibold mt-0.5">×{item.quantity} @ Rp {item.unit_price.toLocaleString("id-ID")}</p>
+                          {item.notes && <p className="text-[11px] text-amber-700 font-semibold mt-0.5">📝 {item.notes}</p>}
+                        </div>
+                        <p className="font-black text-xs text-gray-900">
+                          Rp {(item.unit_price * item.quantity).toLocaleString("id-ID")}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. Financial Calculation Card */}
+                <div className="bg-white p-4 sm:p-5 rounded-2xl border border-gray-200/90 shadow-sm space-y-2 text-xs font-medium text-gray-600 hover:shadow-md transition-shadow">
+                  <div className="flex justify-between">
+                    <span>Subtotal</span>
+                    <span className="font-bold text-gray-900">Rp {subtotal.toLocaleString("id-ID")}</span>
+                  </div>
+                  {tenant.finance_config.tax_percentage > 0 && (
+                    <div className="flex justify-between">
+                      <span>PPN ({tenant.finance_config.tax_percentage}%)</span>
+                      <span>Rp {Math.round(subtotal * tenant.finance_config.tax_percentage / 100).toLocaleString("id-ID")}</span>
+                    </div>
+                  )}
+                  {tenant.finance_config.service_charge_percentage > 0 && (
+                    <div className="flex justify-between">
+                      <span>Service ({tenant.finance_config.service_charge_percentage}%)</span>
+                      <span>Rp {Math.round(subtotal * tenant.finance_config.service_charge_percentage / 100).toLocaleString("id-ID")}</span>
+                    </div>
+                  )}
+                  {orderType === "takeaway" && tenant.finance_config.takeaway_fee > 0 && (
+                    <div className="flex justify-between">
+                      <span>Biaya Takeaway</span>
+                      <span>Rp {tenant.finance_config.takeaway_fee.toLocaleString("id-ID")}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-black text-base pt-2.5 border-t border-gray-100 text-gray-900">
+                    <span>Total Tagihan</span>
+                    <span style={{ color: "var(--tenant-primary)" }}>
+                      Rp {(subtotal + Math.round(subtotal * tenant.finance_config.tax_percentage / 100) + Math.round(subtotal * tenant.finance_config.service_charge_percentage / 100) + (orderType === "takeaway" ? tenant.finance_config.takeaway_fee : 0)).toLocaleString("id-ID")}
+                    </span>
+                  </div>
+                </div>
+
               </div>
 
-              {/* Financial Calculation Card */}
-              <div className="bg-white p-4 rounded-2xl border border-gray-200/80 shadow-2xs space-y-2 text-xs text-gray-600">
-                <div className="flex justify-between">
-                  <span>Subtotal</span>
-                  <span className="font-semibold text-gray-900">Rp {subtotal.toLocaleString("id-ID")}</span>
-                </div>
-                {tenant.finance_config.tax_percentage > 0 && (
-                  <div className="flex justify-between">
-                    <span>PPN ({tenant.finance_config.tax_percentage}%)</span>
-                    <span>Rp {Math.round(subtotal * tenant.finance_config.tax_percentage / 100).toLocaleString("id-ID")}</span>
-                  </div>
-                )}
-                {tenant.finance_config.service_charge_percentage > 0 && (
-                  <div className="flex justify-between">
-                    <span>Service ({tenant.finance_config.service_charge_percentage}%)</span>
-                    <span>Rp {Math.round(subtotal * tenant.finance_config.service_charge_percentage / 100).toLocaleString("id-ID")}</span>
-                  </div>
-                )}
-                {orderType === "takeaway" && tenant.finance_config.takeaway_fee > 0 && (
-                  <div className="flex justify-between">
-                    <span>Biaya Takeaway</span>
-                    <span>Rp {tenant.finance_config.takeaway_fee.toLocaleString("id-ID")}</span>
-                  </div>
-                )}
-                <div className="flex justify-between font-extrabold text-sm pt-2 border-t text-gray-900">
-                  <span>Total Tagihan</span>
-                  <span style={{ color: "var(--tenant-primary)" }}>
-                    Rp {(subtotal + Math.round(subtotal * tenant.finance_config.tax_percentage / 100) + Math.round(subtotal * tenant.finance_config.service_charge_percentage / 100) + (orderType === "takeaway" ? tenant.finance_config.takeaway_fee : 0)).toLocaleString("id-ID")}
-                  </span>
-                </div>
+              {/* Clean Navigation Actions (NO background card wrapper!) */}
+              <div className="pt-2 flex flex-col gap-3">
+                <button
+                  type="button"
+                  className="w-full py-4 text-lg font-black text-white rounded-2xl shadow-xl active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ background: "var(--tenant-primary)" }}
+                  onClick={handleCheckout}
+                  disabled={isCheckingOut}
+                >
+                  {isCheckingOut ? (
+                    <>
+                      <svg className="animate-spin h-5 w-5 text-white mr-2" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      <span>Memproses Pesanan... ⏳</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>⚡ Konfirmasi &amp; Buat Pesanan</span>
+                      <span>· Rp {(subtotal + Math.round(subtotal * tenant.finance_config.tax_percentage / 100) + Math.round(subtotal * tenant.finance_config.service_charge_percentage / 100) + (orderType === "takeaway" ? tenant.finance_config.takeaway_fee : 0)).toLocaleString("id-ID")}</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setScreen("customer_info")}
+                  className="w-full py-2.5 text-xs font-extrabold text-gray-500 hover:text-gray-900 transition-colors text-center cursor-pointer"
+                >
+                  ← Ubah Informasi Pemesan
+                </button>
               </div>
 
-            </div>
-
-            {/* Bottom Streamlined Action Bar */}
-            <div className="p-4 bg-white border-t border-gray-200 flex flex-col gap-2 max-w-lg w-full mx-auto shadow-lg">
-              <button
-                className="w-full py-4 text-base font-extrabold text-white rounded-xl shadow-lg active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ background: "var(--tenant-primary)" }}
-                onClick={handleCheckout}
-                disabled={isCheckingOut}
-              >
-                {isCheckingOut ? (
-                  <>
-                    <svg className="animate-spin h-5 w-5 text-white mr-2" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                    <span>Memproses Pesanan...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>⚡ Konfirmasi &amp; Buat Pesanan</span>
-                    <span>· Rp {(subtotal + Math.round(subtotal * tenant.finance_config.tax_percentage / 100) + Math.round(subtotal * tenant.finance_config.service_charge_percentage / 100) + (orderType === "takeaway" ? tenant.finance_config.takeaway_fee : 0)).toLocaleString("id-ID")}</span>
-                  </>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setScreen("cart")}
-                className="w-full py-2 text-xs font-bold text-gray-500 hover:text-gray-800 transition-colors text-center cursor-pointer"
-              >
-                ← Edit Keranjang Belanja
-              </button>
             </div>
           </motion.div>
         )}
@@ -964,7 +987,7 @@ export default function KioskPage({
                 </>
               )}
             </div>
-            
+
             <p className="text-white text-center text-sm px-4 max-w-sm opacity-90 leading-relaxed">
               {bl.payment_timing === "postpaid"
                 ? "Pesanan Anda telah masuk dan sedang kami siapkan. Silakan duduk dan kami akan menghubungi Anda saat pesanan siap."
@@ -1009,7 +1032,7 @@ export default function KioskPage({
                 ) : (
                   <div className="w-full flex items-center justify-center text-5xl" style={{ height: 200, background: "var(--tenant-primary)18" }}>🍽️</div>
                 )}
-                
+
                 <div className="p-5 overflow-y-auto flex-1 flex flex-col gap-3">
                   <div className="flex justify-between items-start gap-4">
                     <h2 className="text-xl font-bold leading-tight">{activeProduct.name}</h2>
@@ -1049,10 +1072,10 @@ export default function KioskPage({
 
                     <div>
                       <h3 className="text-sm font-bold text-gray-800 mb-2">Catatan Tambahan</h3>
-                      <textarea 
-                        value={modalNotes} 
-                        onChange={(e) => setModalNotes(e.target.value)} 
-                        placeholder="Contoh: Jangan terlalu pedas, tambah es, dll." 
+                      <textarea
+                        value={modalNotes}
+                        onChange={(e) => setModalNotes(e.target.value)}
+                        placeholder="Contoh: Jangan terlalu pedas, tambah es, dll."
                         className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-[var(--tenant-primary)] text-sm"
                         rows={2}
                       />
