@@ -30,6 +30,7 @@ export interface BusinessLogic {
     payment_mode: PaymentMode;
     numbering: NamberingType;
     require_cashier_verification: boolean;
+    pos_only?: boolean; // Standalone POS murni: pre-paid wajib, skip dapur/runner, auto-complete
 }
 
 export interface FinanceConfig {
@@ -39,9 +40,14 @@ export interface FinanceConfig {
 }
 
 export interface ReceiptConfig {
+    paper_size: "58mm" | "80mm";
     header_text: string;
     footer_text: string;
     show_logo: boolean;
+    show_wifi_info?: boolean;
+    wifi_name?: string;
+    wifi_password?: string;
+    auto_print_on_payment?: boolean;
 }
 
 export interface Tenant {

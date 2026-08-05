@@ -257,7 +257,7 @@ export default function KioskPage({
           <motion.div
             key="splash"
             className="fixed inset-0 flex flex-col items-center justify-center"
-            style={{ background: "var(--tenant-primary)" }}
+            style={{ background: "linear-gradient(135deg, var(--tenant-primary), var(--tenant-secondary, var(--tenant-primary)))" }}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, scale: 1.05 }}
@@ -347,7 +347,7 @@ export default function KioskPage({
             {/* Header */}
             <header
               className="sticky top-0 z-20 px-4 py-3 flex items-center justify-between"
-              style={{ background: "var(--tenant-primary)", boxShadow: "0 2px 12px rgba(0,0,0,.15)" }}
+              style={{ background: "linear-gradient(135deg, var(--tenant-primary), var(--tenant-secondary, var(--tenant-primary)))", boxShadow: "0 2px 12px rgba(0,0,0,.15)" }}
             >
               <div className="flex items-center gap-3">
                 {tenant.logo_url && (
@@ -449,6 +449,7 @@ export default function KioskPage({
                     role="kiosk"
                     quantity={inCart}
                     primaryColor="var(--tenant-primary)"
+                    secondaryColor="var(--tenant-secondary)"
                     onAddToCart={(p) => addToCart(p, 1, "")}
                     onUpdateQuantity={(p, newQty) => {
                       if (newQty < inCart) {
@@ -481,7 +482,7 @@ export default function KioskPage({
                   className="w-full py-3.5 rounded-2xl text-white font-bold flex items-center justify-between px-5 shadow-xl"
                   style={{ background: "var(--tenant-primary)", boxShadow: "0 8px 24px rgba(0,0,0,.25)" }}
                 >
-                  <span className="bg-white/25 px-2.5 py-0.5 rounded-full text-sm font-bold">{totalItems}</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-sm font-bold text-white shadow-xs" style={{ background: "var(--tenant-secondary, #ec4899)" }}>{totalItems}</span>
                   <span>Lihat Keranjang →</span>
                   <span className="text-sm">Rp {subtotal.toLocaleString("id-ID")}</span>
                 </motion.button>
@@ -910,7 +911,7 @@ export default function KioskPage({
                 </p>
                 <div className="card p-6 text-center">
                   <p className="text-gray-500 text-sm">Nomor Antrian</p>
-                  <p className="text-5xl font-black mt-1" style={{ color: "var(--tenant-primary)" }}>
+                  <p className="text-5xl font-black mt-1" style={{ color: "var(--tenant-secondary, var(--tenant-primary))" }}>
                     #{queueNumber}
                   </p>
                 </div>
@@ -1044,7 +1045,7 @@ export default function KioskPage({
                   {(activeProduct.is_featured || activeProduct.labels.length > 0) && (
                     <div className="flex flex-wrap gap-1">
                       {activeProduct.is_featured && (
-                        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: "var(--tenant-primary)" }}>⭐ Unggulan</span>
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white shadow-xs" style={{ background: "var(--tenant-secondary, #ec4899)" }}>⭐ Unggulan</span>
                       )}
                       {activeProduct.labels.map((l) => (
                         <span key={l} className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 capitalize">

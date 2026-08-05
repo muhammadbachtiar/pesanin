@@ -29,7 +29,7 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
     });
     return set;
   }, [orders]);
-  const undoQueueRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const undoQueueRef = useRef<Record<string, { timeout: ReturnType<typeof setTimeout>; previousNotes?: string | null }>>({});
 
   useEffect(() => {
     async function init() {
@@ -37,7 +37,11 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
       const t = await getTenantBySlug(tenant_slug);
       if (!t) return;
       setTenant(t);
-      const data = await getOrdersByTenant(t.id, ["cooking"]);
+      const startOfYesterday = new Date();
+      startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+      startOfYesterday.setHours(0, 0, 0, 0);
+
+      const data = await getOrdersByTenant(t.id, ["cooking"], startOfYesterday.toISOString());
       setOrders(data);
     }
     init();
@@ -74,16 +78,34 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
         : false
   );
 
-  const undoMark = useCallback((orderId: string) => {
-    const timer = undoQueueRef.current[orderId];
-    if (timer) {
-      clearTimeout(timer);
+  const undoMark = useCallback(async (orderId: string) => {
+    const queueEntry = undoQueueRef.current[orderId];
+    if (queueEntry) {
+      clearTimeout(queueEntry.timeout);
       delete undoQueueRef.current[orderId];
       setUndoQueueState((prev) => {
         const next = { ...prev };
         delete next[orderId];
         return next;
       });
+
+      if (queueEntry.previousNotes !== undefined) {
+        const prevNotes = queueEntry.previousNotes;
+        // 1. Revert local state: uncheck items back to restored state!
+        setOrders((prev) =>
+          prev.map((o) =>
+            o.id === orderId ? ({ ...o, customer_notes: prevNotes, _marking: false } as Order) : o
+          )
+        );
+        // 2. Revert DB state
+        try {
+          const { cookedItemIds } = parseCustomerNotes(prevNotes);
+          await updateOrderCookedItems(orderId, null, cookedItemIds);
+        } catch (err) {
+          console.error("Failed to revert DB notes on undoMark:", err);
+        }
+        return;
+      }
     }
 
     setOrders((prev) =>
@@ -91,11 +113,12 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
     );
   }, []);
 
-  const markDone = useCallback((orderId: string) => {
-    if (undoQueueRef.current[orderId]) {
-      clearTimeout(undoQueueRef.current[orderId]);
-      delete undoQueueRef.current[orderId];
+  const markDone = useCallback((orderId: string, previousNotes?: string | null) => {
+    const existing = undoQueueRef.current[orderId];
+    if (existing) {
+      clearTimeout(existing.timeout);
     }
+    const savedNotes = previousNotes !== undefined ? previousNotes : existing?.previousNotes;
 
     setOrders((prev) =>
       prev.map((o) => (o.id === orderId ? ({ ...o, _marking: true } as Order) : o))
@@ -116,7 +139,7 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
       setOrders((prev) => prev.filter((o) => o.id !== orderId));
     }, 5000);
 
-    undoQueueRef.current[orderId] = timeout;
+    undoQueueRef.current[orderId] = { timeout, previousNotes: savedNotes };
   }, []);
 
   const toggleItemComplete = useCallback(
@@ -153,7 +176,7 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
         });
 
       if (allDoneNow && !isAlreadyCooked) {
-        markDone(order.id);
+        markDone(order.id, previousNotes);
       }
 
       // 2. ASYNC BACKGROUND DB CALL with Rollback
@@ -184,7 +207,7 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
       setOrders((prev) =>
         prev.map((o) => (o.id === order.id ? { ...o, customer_notes: newNotes } : o))
       );
-      markDone(order.id);
+      markDone(order.id, previousNotes);
 
       // Background DB update
       try {
@@ -282,13 +305,13 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
         })
       );
 
-      for (const [orderId, { order, cookedIds }] of orderUpdates.entries()) {
+      for (const [orderId, { order, previousNotes, cookedIds }] of orderUpdates.entries()) {
         if (
           order.items &&
           order.items.length > 0 &&
           order.items.every((it) => it.id && cookedIds.includes(it.id))
         ) {
-          markDone(order.id);
+          markDone(order.id, previousNotes ?? order.customer_notes);
         }
       }
 
@@ -397,7 +420,7 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
                           <div className="flex items-center gap-2 flex-wrap">
                             <span
                               className="text-3xl font-black leading-none"
-                              style={{ color: "var(--tenant-primary, #6366f1)" }}
+                              style={{ color: "#38bdf8" }}
                             >
                               #{order.queue_number}
                             </span>

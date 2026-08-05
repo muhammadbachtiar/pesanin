@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { motion } from "framer-motion";
 import { Table, Tag, Button, Modal, Form, Input, Select, Badge, Tabs, Switch, InputNumber, Drawer, Space } from "antd";
 import { getOrdersByTenant, getOrderById, markOrderPaid, markOrderServed, approveOrder, voidOrder, updateOrderStatus, createOrder, generateQueueNumber, parseCustomerNotes, buildCustomerNotes, updateOrderCookedItems, getActiveOrderByTable } from "@/services/orderService";
@@ -48,8 +48,16 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [voidForm] = Form.useForm();
   const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
   const [undoQueueState, setUndoQueueState] = useState<Record<string, string>>({});
-  const undoQueueRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const undoQueueRef = useRef<Record<string, { timer: ReturnType<typeof setTimeout>; previousNotes?: string }>>({});
+  const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const softRefreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [windowWidth, setWindowWidth] = useState<number>(typeof window !== "undefined" ? window.innerWidth : 1200);
+  // Pull-to-refresh state
+  const [pullY, setPullY] = useState(0);
+  const [isPulling, setIsPulling] = useState(false);
+  const pullStartY = useRef(0);
+  const PULL_THRESHOLD = 72;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -64,7 +72,21 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     startOfToday.setHours(0, 0, 0, 0);
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
-    const data = await getOrdersByTenant(tenantId, undefined, startOfToday.toISOString(), endOfToday.toISOString());
+
+    // Retention Cutoff: Max H-1 (Kemarin 00:00:00 / 48 Jam) agar pesanan ghaib lampau tidak mengotori layar
+    const startOfYesterday = new Date();
+    startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+    startOfYesterday.setHours(0, 0, 0, 0);
+
+    const [activeOrders, todayDoneOrders] = await Promise.all([
+      getOrdersByTenant(tenantId, ["pending", "cooking", "ready"], startOfYesterday.toISOString()),
+      getOrdersByTenant(tenantId, ["completed", "cancelled"], startOfToday.toISOString(), endOfToday.toISOString()),
+    ]);
+
+    const data = [...activeOrders, ...todayDoneOrders].filter(
+      (o, i, arr) => arr.findIndex((x) => x.id === o.id) === i
+    ).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
     for (const o of data) {
       if (o.order_status === "ready" && o.payment_status === "paid") {
         const { isServed } = parseCustomerNotes(o.customer_notes);
@@ -76,6 +98,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     }
 
     setOrders(data);
+    setLastSynced(new Date());
     setPendingBadge(
       data.filter(
         (o) =>
@@ -85,42 +108,60 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     );
   }, []);
 
-  const cancelCountdownAction = useCallback((orderId: string) => {
-    const timer = undoQueueRef.current[orderId];
-    if (timer) {
-      clearTimeout(timer);
+  const cancelCountdownAction = useCallback(async (orderId: string) => {
+    const queueEntry = undoQueueRef.current[orderId];
+    if (queueEntry) {
+      clearTimeout(queueEntry.timer);
       delete undoQueueRef.current[orderId];
       setUndoQueueState((prev) => {
         const next = { ...prev };
         delete next[orderId];
         return next;
       });
+
+      if (queueEntry.previousNotes !== undefined) {
+        const prevNotes = queueEntry.previousNotes;
+        setOrders((prev) =>
+          prev.map((o) => (o.id === orderId ? { ...o, customer_notes: prevNotes ?? "" } : o))
+        );
+        try {
+          const { cookedItemIds } = parseCustomerNotes(prevNotes ?? "");
+          await updateOrderCookedItems(orderId, null, cookedItemIds);
+        } catch (err) {
+          console.error("Failed to revert DB notes in cashier cancelCountdownAction:", err);
+        }
+      }
+
       if (tenant) refreshOrders(tenant.id);
     }
   }, [tenant, refreshOrders]);
 
-  const startCountdownAction = useCallback((orderId: string, actionLabel: string, actionFn: () => Promise<void>) => {
-    if (undoQueueRef.current[orderId]) {
-      clearTimeout(undoQueueRef.current[orderId]);
-      delete undoQueueRef.current[orderId];
-    }
+  const startCountdownAction = useCallback(
+    (orderId: string, actionLabel: string, actionFn: () => Promise<void>, previousNotes?: string | null) => {
+      const existing = undoQueueRef.current[orderId];
+      if (existing) {
+        clearTimeout(existing.timer);
+      }
+      const savedNotes: string | null | undefined = previousNotes !== undefined ? previousNotes : existing?.previousNotes;
 
-    setUndoQueueState((prev) => ({ ...prev, [orderId]: actionLabel }));
+      setUndoQueueState((prev) => ({ ...prev, [orderId]: actionLabel }));
 
-    const timeout = setTimeout(async () => {
-      if (!undoQueueRef.current[orderId]) return;
-      delete undoQueueRef.current[orderId];
-      setUndoQueueState((prev) => {
-        const next = { ...prev };
-        delete next[orderId];
-        return next;
-      });
+      const timeout = setTimeout(async () => {
+        if (!undoQueueRef.current[orderId]) return;
+        delete undoQueueRef.current[orderId];
+        setUndoQueueState((prev) => {
+          const next = { ...prev };
+          delete next[orderId];
+          return next;
+        });
 
-      await actionFn();
-    }, 5000);
+        await actionFn();
+      }, 5000);
 
-    undoQueueRef.current[orderId] = timeout;
-  }, []);
+      undoQueueRef.current[orderId] = { timer: timeout, previousNotes: savedNotes ?? undefined };
+    },
+    []
+  );
 
 
 
@@ -141,6 +182,51 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     }
     init();
   }, [params, refreshOrders]);
+
+  // Auto soft refresh every 60 seconds (background heartbeat)
+  useEffect(() => {
+    if (!tenant) return;
+    const tenantId = tenant.id;
+    softRefreshIntervalRef.current = setInterval(async () => {
+      await refreshOrders(tenantId);
+    }, 60000);
+    return () => {
+      if (softRefreshIntervalRef.current) clearInterval(softRefreshIntervalRef.current);
+    };
+  }, [tenant, refreshOrders]);
+
+  const handleManualSync = useCallback(async () => {
+    if (!tenant || isSyncing) return;
+    setIsSyncing(true);
+    try {
+      await refreshOrders(tenant.id);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [tenant, refreshOrders, isSyncing]);
+
+  // Pull-to-refresh touch handlers
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (window.scrollY === 0) {
+      pullStartY.current = e.touches[0].clientY;
+      setIsPulling(true);
+    }
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (!isPulling) return;
+    const delta = e.touches[0].clientY - pullStartY.current;
+    if (delta > 0) setPullY(Math.min(delta, PULL_THRESHOLD + 20));
+  }, [isPulling]);
+
+  const handleTouchEnd = useCallback(async () => {
+    if (!isPulling) return;
+    if (pullY >= PULL_THRESHOLD) {
+      await handleManualSync();
+    }
+    setPullY(0);
+    setIsPulling(false);
+  }, [isPulling, pullY, handleManualSync]);
 
   useRealtimeOrders(
     tenant?.id ?? "",
@@ -209,7 +295,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     setSubmitting((s) => ({ ...s, pay: true }));
     try {
       const { isServed } = parseCustomerNotes(fullOrder.customer_notes);
-      const targetStatus: Order["order_status"] = (payModal.autoComplete || (isServed && fullOrder.order_status === "ready"))
+      // pos_only mode: always mark completed immediately after payment (no kitchen flow)
+      const targetStatus: Order["order_status"] = (isPosOnly || payModal.autoComplete || (isServed && fullOrder.order_status === "ready"))
         ? "completed"
         : fullOrder.order_status === "pending"
           ? "cooking"
@@ -434,13 +521,13 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       setNewOrderDrawer(false);
 
       if (created) {
-        if (isPayNow) {
-          // Direct payment mode -> set to cooking and open payment modal
+        if (isPayNow || isPosOnly) {
+          // POS mode: skip kitchen, go directly to payment + auto-complete on pay
           await updateOrderStatus(created.id, "cooking");
-          setPayModal({ open: true, order: created, autoComplete: false });
+          setPayModal({ open: true, order: created, autoComplete: isPosOnly });
           setPayMethod("cash");
           setCashReceived(created.total_amount);
-          message.success(`Pesanan #${qn} berhasil dikirim ke Dapur!`);
+          message.success(`Pesanan #${qn} berhasil dikirim!`);
         } else {
           message.success(`Pesanan #${qn} berhasil disimpan di daftar Menunggu`);
         }
@@ -483,7 +570,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         startCountdownAction(order.id, "Tandai Siap", async () => {
           await updateOrderStatus(order.id, "ready");
           if (tenant) refreshOrders(tenant.id);
-        });
+        }, previousNotes);
       }
 
       try {
@@ -525,7 +612,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           console.error("Failed to mark order ready in cashier:", err);
           if (tenant) refreshOrders(tenant.id);
         }
-      });
+      }, previousNotes);
     },
     [startCountdownAction, tenant, refreshOrders]
   );
@@ -538,7 +625,9 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   });
 
   const bl = tenant?.business_logic;
-  const showPendingTab = bl?.payment_timing === "postpaid" || bl?.payment_mode === "manual";
+  const isPosOnly = bl?.pos_only === true;
+  // pos_only: always prepaid, hide pending tab since every order is immediately completed
+  const showPendingTab = !isPosOnly && (bl?.payment_timing === "postpaid" || bl?.payment_mode === "manual");
 
   const columns = [
     {
@@ -638,6 +727,28 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           <Tag color={PAY_COLOR[r.payment_status]}>{r.payment_status.toUpperCase()}</Tag>
         </div>
       ),
+    },
+    {
+      title: "Waktu",
+      width: 120,
+      render: (_: unknown, r: Order) => {
+        const orderDate = new Date(r.created_at);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const isYesterday = orderDate < today;
+        const timeStr = orderDate.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+        const dateStr = orderDate.toLocaleDateString("id-ID", { day: "numeric", month: "short" });
+        return (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-xs font-bold text-gray-800">{timeStr}</span>
+            {isYesterday && (
+              <span className="text-[10px] font-extrabold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full w-fit flex items-center gap-0.5">
+                🗓️ {dateStr}
+              </span>
+            )}
+          </div>
+        );
+      },
     },
     {
       title: "Total",
@@ -805,6 +916,20 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 Void
               </Button>
             )}
+
+            {/* REPRINT RECEIPT BUTTON */}
+            {(r.payment_status === "paid" || isOrderEffectivelyCompleted(r)) && (
+              <Button
+                size="small"
+                icon={<span>🖨️</span>}
+                onClick={() => {
+                  setPrintReceiptData({ order: r, payMethod: r.payment_method ?? "cash", cashReceived: null });
+                  setTimeout(() => window.print(), 150);
+                }}
+              >
+                Cetak
+              </Button>
+            )}
           </div>
         );
       },
@@ -848,31 +973,79 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   if (!tenant) return <div className="p-8 text-gray-400">Loading...</div>;
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f1f5f9" }}>
+    <div
+      style={{ minHeight: "100vh", background: "#f1f5f9" }}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Pull-to-refresh indicator */}
+      {pullY > 0 && (
+        <div
+          className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center transition-all"
+          style={{ height: pullY, background: "rgba(0,0,0,0.05)" }}
+        >
+          <div className={`flex flex-col items-center gap-1 transition-all ${pullY >= PULL_THRESHOLD ? "opacity-100" : "opacity-50"}`}>
+            <span className={`text-2xl transition-transform ${pullY >= PULL_THRESHOLD ? "rotate-180" : ""}`}>↓</span>
+            <span className="text-xs font-bold text-gray-500">{pullY >= PULL_THRESHOLD ? "Lepas untuk refresh" : "Tarik untuk refresh"}</span>
+          </div>
+        </div>
+      )}
       {/* ─── Header ─── */}
       <header
-        className="px-6 py-4 flex items-center justify-between shadow-md gap-4"
-        style={{ background: "var(--tenant-primary)" }}
+        className="px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between shadow-md gap-3"
+        style={{ background: "linear-gradient(135deg, var(--tenant-primary), var(--tenant-secondary, var(--tenant-primary)))" }}
       >
-        <div className="flex-1">
-          <h1 className="text-white font-bold text-xl leading-none">{tenant.name}</h1>
-          <p className="text-white/70 text-sm mt-0.5">
-            Layar Kasir · <span className="font-semibold">{new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" })}</span>
-          </p>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-white font-bold text-xl leading-none truncate flex items-center gap-2">
+            {tenant.name}
+            {isPosOnly && (
+              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/20 text-white/90 tracking-wide">🏪 POS</span>
+            )}
+          </h1>
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            <p className="text-white/70 text-xs">
+              {isPosOnly ? "Kasir POS Murni" : "Layar Kasir"} · <span className="font-semibold">{new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" })}</span>
+            </p>
+            {lastSynced && (
+              <span className="text-white/50 text-[10px] font-medium">
+                · Sync {lastSynced.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Manual Sync Button - improved UX */}
+          <button
+            onClick={handleManualSync}
+            disabled={isSyncing}
+            title={isSyncing ? "Sedang sinkronisasi..." : "Sinkronkan Data"}
+            className="relative flex items-center gap-1.5 text-white/80 hover:text-white text-xs font-bold border border-white/30 px-3 py-2 rounded-xl hover:bg-white/10 transition-all disabled:opacity-60 overflow-hidden"
+          >
+            {isSyncing ? (
+              <>
+                <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin flex-shrink-0" />
+                <span className="hidden sm:inline">Sinkron...</span>
+              </>
+            ) : (
+              <>
+                <span className="text-sm">🔄</span>
+                <span className="hidden sm:inline">Sinkronkan</span>
+              </>
+            )}
+          </button>
           <a
             href="analytics"
             className="flex items-center gap-1.5 text-white/80 hover:text-white text-sm font-medium border border-white/30 px-3 py-2 rounded-xl hover:bg-white/10 transition-all"
           >
-            📊 Analitik
+            📊 <span className="hidden sm:inline">Analitik</span>
           </a>
           <button
             onClick={() => setNewOrderDrawer(true)}
             className="flex items-center gap-2 bg-white font-bold text-sm px-4 py-2 rounded-xl shadow hover:shadow-md active:scale-95 transition-all"
             style={{ color: "var(--tenant-primary)" }}
           >
-            <span className="text-lg leading-none">＋</span> Pesanan Baru
+            <span className="text-lg leading-none">＋</span> <span className="hidden sm:inline">Pesanan Baru</span>
           </button>
         </div>
       </header>
@@ -1150,32 +1323,41 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   />
                 </Space.Compact>
 
-                {/* Quick Nominal Shortcuts */}
-                {payModal.order && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      { label: "Uang Pas", val: payModal.order.total_amount },
-                      { label: "20.000", val: 20000 },
-                      { label: "50.000", val: 50000 },
-                      { label: "100.000", val: 100000 },
-                      { label: "200.000", val: 200000 },
-                    ]
-                      .filter((p) => p.val >= payModal.order!.total_amount || p.label === "Uang Pas")
-                      .map((p, idx) => (
+                {/* Smart Adaptive Quick Cash Denominations */}
+                {payModal.order && (() => {
+                  const total = payModal.order.total_amount;
+                  // Standard IDR banknote denominations
+                  const ALL_NOTES = [2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000];
+                  // Smart rounding: nearest 10k, 50k, 100k above total
+                  const smartRound = (n: number, step: number) => Math.ceil(n / step) * step;
+                  const r10k = smartRound(total, 10000);
+                  const r50k = smartRound(total, 50000);
+                  const r100k = smartRound(total, 100000);
+                  const smartSet = new Set([total, r10k, r50k, r100k]);
+                  // Add banknotes only if >= total
+                  ALL_NOTES.forEach((n) => { if (n >= total) smartSet.add(n); });
+                  const options = Array.from(smartSet).sort((a, b) => a - b).slice(0, 7);
+
+                  return (
+                    <div className="flex flex-wrap gap-1.5">
+                      {options.map((val, idx) => (
                         <button
                           key={idx}
                           type="button"
-                          onClick={() => setCashReceived(p.val)}
-                          className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all ${cashReceived === p.val
+                          onClick={() => setCashReceived(val)}
+                          className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all ${cashReceived === val
                             ? "bg-amber-600 text-white border-amber-600 shadow-sm"
                             : "bg-white text-amber-900 border-amber-200 hover:bg-amber-100/50"
                             }`}
                         >
-                          {p.label === "Uang Pas" ? "✨ Uang Pas" : `Rp ${p.val.toLocaleString("id-ID")}`}
+                          {val === total
+                            ? `✨ Uang Pas (${val.toLocaleString("id-ID")})`
+                            : `Rp ${val.toLocaleString("id-ID")}`}
                         </button>
                       ))}
-                  </div>
-                )}
+                    </div>
+                  );
+                })()}
 
                 {/* Result Kembalian / Uang Kurang */}
                 {cashReceived !== null && payModal.order && (
@@ -1243,143 +1425,175 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         )}
       </Modal>
 
-      {/* ─── PRINTABLE THERMAL RECEIPT AREA ─── */}
-      {printReceiptData && printReceiptData.order && tenant && (
-        <div id="receipt-print-area" className="hidden print:block font-mono text-black text-xs p-2 max-w-[80mm] mx-auto leading-tight">
-          <div className="text-center mb-2">
-            {tenant.logo_url && tenant.receipt_config?.show_logo && (
-              <img src={tenant.logo_url} alt={tenant.name} className="w-10 h-10 mx-auto mb-1 object-contain" />
-            )}
-            <h2 className="font-bold text-sm uppercase">{tenant.name}</h2>
-            {tenant.receipt_config?.header_text && (
-              <p className="text-[10px] text-gray-600 whitespace-pre-line">{tenant.receipt_config.header_text}</p>
-            )}
-          </div>
-
-          <div className="border-t border-b border-dashed border-black py-1 my-1.5 text-[10px] space-y-0.5">
-            <div className="flex justify-between">
-              <span>No. Antrian:</span>
-              <span className="font-bold">#{printReceiptData.order.queue_number}</span>
-            </div>
-            {printReceiptData.order.table_number && (
-              <div className="flex justify-between">
-                <span>Meja:</span>
-                <span className="font-bold">{printReceiptData.order.table_number}</span>
+      {/* ─── PRINTABLE THERMAL RECEIPT AREA (Standard Nasional Indonesia) ─── */}
+      {printReceiptData && printReceiptData.order && tenant && (() => {
+        const rc = tenant.receipt_config;
+        const paperWidth = rc?.paper_size === "58mm" ? "58mm" : "80mm";
+        const o = printReceiptData.order;
+        const custName = o.customer_name ||
+          parseCustomerNotes(o.customer_notes).customerName || undefined;
+        return (
+          <div
+            id="receipt-print-area"
+            className="hidden print:block font-mono text-black leading-snug"
+            style={{ width: paperWidth, margin: "0 auto", fontSize: "10px", padding: "4px" }}
+          >
+            {/* ── Header ── */}
+            <div style={{ textAlign: "center", marginBottom: "6px" }}>
+              {rc?.show_logo && tenant.logo_url && (
+                <img src={tenant.logo_url} alt={tenant.name}
+                  style={{ width: "40px", height: "40px", objectFit: "contain", margin: "0 auto 4px" }}
+                />
+              )}
+              <div style={{ fontWeight: 900, fontSize: "13px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                {tenant.name}
               </div>
-            )}
-            <div className="flex justify-between">
-              <span>Tipe Pesanan:</span>
-              <span className="font-semibold">{printReceiptData.order.order_type === "takeaway" ? "TAKEAWAY" : "DINE-IN"}</span>
+              {rc?.header_text && (
+                <div style={{ fontSize: "9px", marginTop: "2px", whiteSpace: "pre-line", color: "#444" }}>
+                  {rc.header_text}
+                </div>
+              )}
+              {rc?.show_wifi_info && rc.wifi_name && (
+                <div style={{ fontSize: "9px", marginTop: "3px", border: "1px dashed #999", padding: "2px 4px", display: "inline-block" }}>
+                  WiFi: <strong>{rc.wifi_name}</strong>{rc.wifi_password ? ` · Pass: ${rc.wifi_password}` : ""}
+                </div>
+              )}
             </div>
-            <div className="flex justify-between">
-              <span>Waktu:</span>
-              <span>{new Date(printReceiptData.order.created_at).toLocaleString("id-ID")}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Kasir:</span>
-              <span>{profile?.full_name || "Staff Kasir"}</span>
-            </div>
-          </div>
 
-          {/* Table of items */}
-          <div className="border-b border-dashed border-black pb-1 mb-1 text-[10px]">
-            <div className="grid grid-cols-12 font-bold border-b border-gray-400 pb-0.5 mb-1">
-              <span className="col-span-6">Menu</span>
-              <span className="col-span-2 text-center">Qty</span>
-              <span className="col-span-4 text-right">Total</span>
+            {/* ── Order Info ── */}
+            <div style={{ borderTop: "1px dashed #000", borderBottom: "1px dashed #000", padding: "4px 0", marginBottom: "4px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>No. Antrian</span>
+                <span style={{ fontWeight: 700 }}>#{o.queue_number}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>Waktu</span>
+                <span>{new Date(o.created_at).toLocaleString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>Tipe</span>
+                <span style={{ fontWeight: 700 }}>{o.order_type === "takeaway" ? "TAKEAWAY" : "DINE-IN"}</span>
+              </div>
+              {o.table_number && (
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span>Meja</span>
+                  <span style={{ fontWeight: 700 }}>{o.table_number}</span>
+                </div>
+              )}
+              {custName && (
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span>Pelanggan</span>
+                  <span style={{ fontWeight: 700 }}>{custName}</span>
+                </div>
+              )}
             </div>
-            {printReceiptData.order.items?.map((it, idx) => (
-              <div key={idx} className="grid grid-cols-12 py-0.5">
-                <div className="col-span-6 pr-1">
-                  <span className="font-medium">{it.product_name_snapshot}</span>
+
+            {/* ── Item List: Name / Unit Price × Qty = Subtotal ── */}
+            <div style={{ borderBottom: "1px dashed #000", paddingBottom: "4px", marginBottom: "4px" }}>
+              {o.items?.map((it, idx) => (
+                <div key={idx} style={{ marginBottom: "4px" }}>
+                  <div style={{ fontWeight: 700 }}>{it.product_name_snapshot}</div>
                   {it.selected_variants?.map((v, vi) => (
-                    <span key={vi} className="block text-[8px] text-gray-500">↳ {v.group}: {v.option}</span>
+                    <div key={vi} style={{ fontSize: "8px", color: "#555", paddingLeft: "6px" }}>
+                      ↳ {v.group}: {v.option}{v.additional_price > 0 ? ` (+${v.additional_price.toLocaleString("id-ID")})` : ""}
+                    </div>
                   ))}
-                  {it.notes && <span className="block text-[8px] text-gray-500">📝 {it.notes}</span>}
+                  {it.notes && (
+                    <div style={{ fontSize: "8px", color: "#777", paddingLeft: "6px" }}>📝 {it.notes}</div>
+                  )}
+                  <div style={{ display: "flex", justifyContent: "space-between", paddingLeft: "6px" }}>
+                    <span>{it.unit_price.toLocaleString("id-ID")} × {it.quantity}</span>
+                    <span style={{ fontWeight: 600 }}>Rp {(it.unit_price * it.quantity).toLocaleString("id-ID")}</span>
+                  </div>
+                  {/* Variant extra price per item if any */}
+                  {it.selected_variants?.some((v) => v.additional_price > 0) && (
+                    <div style={{ display: "flex", justifyContent: "space-between", paddingLeft: "6px", fontSize: "8px", color: "#555" }}>
+                      <span>Harga Dasar: {it.base_price_snapshot.toLocaleString("id-ID")} / item</span>
+                    </div>
+                  )}
                 </div>
-                <span className="col-span-2 text-center">{it.quantity}</span>
-                <span className="col-span-4 text-right font-semibold">Rp {it.subtotal.toLocaleString("id-ID")}</span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
 
-          {/* Totals */}
-          <div className="text-[10px] space-y-0.5">
-            <div className="flex justify-between">
-              <span>Subtotal:</span>
-              <span>Rp {printReceiptData.order.subtotal.toLocaleString("id-ID")}</span>
-            </div>
-            {printReceiptData.order.tax_amount > 0 && (
-              <div className="flex justify-between">
-                <span>Pajak:</span>
-                <span>Rp {printReceiptData.order.tax_amount.toLocaleString("id-ID")}</span>
+            {/* ── Financial Summary ── */}
+            <div style={{ marginBottom: "4px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>Subtotal</span><span>Rp {o.subtotal.toLocaleString("id-ID")}</span>
               </div>
-            )}
-            {printReceiptData.order.service_charge_amount > 0 && (
-              <div className="flex justify-between">
-                <span>Service Charge:</span>
-                <span>Rp {printReceiptData.order.service_charge_amount.toLocaleString("id-ID")}</span>
-              </div>
-            )}
-            {printReceiptData.order.takeaway_fee_amount > 0 && (
-              <div className="flex justify-between">
-                <span>Biaya Takeaway:</span>
-                <span>Rp {printReceiptData.order.takeaway_fee_amount.toLocaleString("id-ID")}</span>
-              </div>
-            )}
-            <div className="flex justify-between font-bold text-xs pt-1 border-t border-black">
-              <span>TOTAL BELANJA:</span>
-              <span>Rp {printReceiptData.order.total_amount.toLocaleString("id-ID")}</span>
-            </div>
-          </div>
-
-          {/* Payment */}
-          <div className="border-t border-dashed border-black mt-1.5 pt-1 text-[10px] space-y-0.5">
-            <div className="flex justify-between">
-              <span>Metode Bayar:</span>
-              <span className="font-bold uppercase">{printReceiptData.payMethod === "cash" ? "TUNAI / CASH" : printReceiptData.payMethod}</span>
-            </div>
-            {printReceiptData.payMethod === "cash" && printReceiptData.cashReceived !== null && (
-              <>
-                <div className="flex justify-between">
-                  <span>Uang Diterima:</span>
-                  <span>Rp {printReceiptData.cashReceived.toLocaleString("id-ID")}</span>
+              {o.tax_amount > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span>PPN ({o.finance_snapshot?.tax_percentage ?? tenant.finance_config.tax_percentage}%)</span>
+                  <span>Rp {o.tax_amount.toLocaleString("id-ID")}</span>
                 </div>
-                <div className="flex justify-between font-bold">
-                  <span>Kembalian:</span>
-                  <span>Rp {Math.max(0, printReceiptData.cashReceived - printReceiptData.order.total_amount).toLocaleString("id-ID")}</span>
+              )}
+              {o.service_charge_amount > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span>Service Charge ({o.finance_snapshot?.service_charge_percentage ?? tenant.finance_config.service_charge_percentage}%)</span>
+                  <span>Rp {o.service_charge_amount.toLocaleString("id-ID")}</span>
                 </div>
-              </>
+              )}
+              {o.takeaway_fee_amount > 0 && (
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span>Biaya Takeaway</span><span>Rp {o.takeaway_fee_amount.toLocaleString("id-ID")}</span>
+                </div>
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 900, fontSize: "12px", borderTop: "1px solid #000", paddingTop: "3px", marginTop: "3px" }}>
+                <span>TOTAL</span><span>Rp {o.total_amount.toLocaleString("id-ID")}</span>
+              </div>
+            </div>
+
+            {/* ── Payment ── */}
+            <div style={{ borderTop: "1px dashed #000", paddingTop: "4px", marginBottom: "4px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>Metode Bayar</span>
+                <span style={{ fontWeight: 700, textTransform: "uppercase" }}>
+                  {printReceiptData.payMethod === "cash" ? "TUNAI" :
+                   printReceiptData.payMethod === "qris_static" ? "QRIS" :
+                   printReceiptData.payMethod === "bank_transfer" ? "TRANSFER" : printReceiptData.payMethod}
+                </span>
+              </div>
+              {printReceiptData.payMethod === "cash" && printReceiptData.cashReceived !== null && (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>Tunai Diterima</span><span>Rp {printReceiptData.cashReceived.toLocaleString("id-ID")}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
+                    <span>Kembalian</span>
+                    <span>Rp {Math.max(0, printReceiptData.cashReceived - o.total_amount).toLocaleString("id-ID")}</span>
+                  </div>
+                </>
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
+                <span>Status</span><span>LUNAS ✓</span>
+              </div>
+            </div>
+
+            {/* ── Footer ── */}
+            {rc?.footer_text && (
+              <div style={{ borderTop: "1px dashed #000", paddingTop: "4px", textAlign: "center", fontSize: "9px", marginTop: "4px" }}>
+                <p style={{ whiteSpace: "pre-line" }}>{rc.footer_text}</p>
+              </div>
             )}
-            <div className="flex justify-between text-black font-bold pt-0.5">
-              <span>Status Pembayaran:</span>
-              <span>LUNAS ✅</span>
+            <div style={{ textAlign: "center", marginTop: "6px", fontSize: "9px", color: "#888" }}>
+              — Terima Kasih Atas Kunjungan Anda —
             </div>
           </div>
+        );
+      })()}
 
-          {/* Footer */}
-          {tenant.receipt_config?.footer_text && (
-            <div className="text-center mt-3 pt-1.5 border-t border-dashed border-black text-[9px]">
-              <p>{tenant.receipt_config.footer_text}</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Inline Print Style */}
+      {/* Inline Print Style — paper_size aware */}
       <style jsx global>{`
+        @page {
+          size: ${tenant.receipt_config?.paper_size === "58mm" ? "58mm" : "80mm"} auto;
+          margin: 0;
+        }
         @media print {
-          body * {
-            visibility: hidden !important;
-          }
-          #receipt-print-area, #receipt-print-area * {
-            visibility: visible !important;
-          }
+          body * { visibility: hidden !important; }
+          #receipt-print-area, #receipt-print-area * { visibility: visible !important; }
           #receipt-print-area {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: 100% !important;
+            position: fixed !important;
+            left: 0 !important; top: 0 !important;
+            width: ${tenant.receipt_config?.paper_size === "58mm" ? "58mm" : "80mm"} !important;
             background: white !important;
             color: black !important;
           }
@@ -1580,6 +1794,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                       role="cashier"
                       quantity={inCartCount}
                       primaryColor="var(--tenant-primary)"
+                      secondaryColor="var(--tenant-secondary)"
                       onAddToCart={addToCart}
                       onUpdateQuantity={updateProductQuantityInCart}
                     />
@@ -1851,7 +2066,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-base">💳</span>
-                      <span>Bayar &amp; Masuk Dapur</span>
+                      <span>{isPosOnly ? "Proses & Bayar Sekarang" : "Bayar & Masuk Dapur"}</span>
                     </div>
                     {cart.length > 0 && (
                       <span className="text-sm font-extrabold bg-white/20 px-2.5 py-0.5 rounded-lg backdrop-blur-xs">
@@ -1860,6 +2075,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     )}
                   </button>
 
+                  {!isPosOnly && (
                   <button
                     type="button"
                     onClick={() => handleCreateCashierOrder("save_pending")}
@@ -1869,6 +2085,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     <span>⏳</span>
                     <span>Simpan ke Waiting List (Menunggu)</span>
                   </button>
+                  )}
                 </div>
               </div>
             </div>

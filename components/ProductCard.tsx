@@ -9,6 +9,7 @@ export interface ProductCardProps {
   role: "cashier" | "kiosk";
   quantity: number;
   primaryColor?: string;
+  secondaryColor?: string;
   onAddToCart: (product: Product) => void;
   onUpdateQuantity?: (product: Product, newQty: number) => void;
   onOpenDetail?: (product: Product) => void;
@@ -19,6 +20,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   role,
   quantity,
   primaryColor = "#6366f1",
+  secondaryColor = "var(--tenant-secondary, #ec4899)",
   onAddToCart,
   onUpdateQuantity,
   onOpenDetail,
@@ -66,7 +68,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       {quantity > 0 && (
         <span
           className="absolute top-2 right-2 z-10 min-w-[22px] h-[22px] px-1.5 rounded-full text-white text-[11px] font-extrabold flex items-center justify-center shadow-md border border-white/30"
-          style={{ background: primaryColor }}
+          style={{ background: secondaryColor }}
         >
           {quantity}×
         </span>

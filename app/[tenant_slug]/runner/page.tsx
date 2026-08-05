@@ -35,13 +35,19 @@ export default function RunnerPage({ params }: { params: Promise<{ tenant_slug: 
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
 
-    // Fetch cooking, ready, and completed orders for today
-    const data = await getOrdersByTenant(
-      tenantId,
-      ["cooking", "ready", "completed"],
-      startOfToday.toISOString(),
-      endOfToday.toISOString()
-    );
+    const startOfYesterday = new Date();
+    startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+    startOfYesterday.setHours(0, 0, 0, 0);
+
+    const [activeOrders, todayDoneOrders] = await Promise.all([
+      getOrdersByTenant(tenantId, ["cooking", "ready"], startOfYesterday.toISOString()),
+      getOrdersByTenant(tenantId, ["completed"], startOfToday.toISOString(), endOfToday.toISOString()),
+    ]);
+
+    const data = [...activeOrders, ...todayDoneOrders].filter(
+      (o, i, arr) => arr.findIndex((x) => x.id === o.id) === i
+    ).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
     setOrders(data);
   }, []);
 
@@ -527,7 +533,7 @@ function OrderCard({ order, type, loading, isUndoing, onServe, onUndo }: OrderCa
             <div className="flex items-center gap-2 flex-wrap">
               <span
                 className="text-2xl font-black leading-none"
-                style={{ color: "var(--tenant-primary, #6366f1)" }}
+                style={{ color: "#38bdf8" }}
               >
                 #{order.queue_number}
               </span>
