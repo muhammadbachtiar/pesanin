@@ -257,7 +257,7 @@ export default function KioskPage({
           <motion.div
             key="splash"
             className="fixed inset-0 flex flex-col items-center justify-center"
-            style={{ background: "linear-gradient(135deg, var(--tenant-primary), var(--tenant-secondary, var(--tenant-primary)))" }}
+          style={{ background: "var(--tenant-primary)" }}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, scale: 1.05 }}
@@ -347,7 +347,7 @@ export default function KioskPage({
             {/* Header */}
             <header
               className="sticky top-0 z-20 px-4 py-3 flex items-center justify-between"
-              style={{ background: "linear-gradient(135deg, var(--tenant-primary), var(--tenant-secondary, var(--tenant-primary)))", boxShadow: "0 2px 12px rgba(0,0,0,.15)" }}
+              style={{ background: "var(--tenant-primary)", boxShadow: "0 2px 12px rgba(0,0,0,.15)" }}
             >
               <div className="flex items-center gap-3">
                 {tenant.logo_url && (
@@ -480,9 +480,9 @@ export default function KioskPage({
                   whileTap={{ scale: 0.97 }}
                   onClick={() => setScreen("cart")}
                   className="w-full py-3.5 rounded-2xl text-white font-bold flex items-center justify-between px-5 shadow-xl"
-                  style={{ background: "var(--tenant-primary)", boxShadow: "0 8px 24px rgba(0,0,0,.25)" }}
+                  style={{ background: "var(--tenant-secondary, var(--tenant-primary))", boxShadow: "0 8px 24px rgba(0,0,0,.25)" }}
                 >
-                  <span className="px-2.5 py-0.5 rounded-full text-sm font-bold text-white shadow-xs" style={{ background: "var(--tenant-secondary, #ec4899)" }}>{totalItems}</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-sm font-bold shadow-xs" style={{ background: "rgba(0,0,0,0.15)", color: "#fff" }}>{totalItems}</span>
                   <span>Lihat Keranjang →</span>
                   <span className="text-sm">Rp {subtotal.toLocaleString("id-ID")}</span>
                 </motion.button>
@@ -544,7 +544,7 @@ export default function KioskPage({
                     <div className="flex items-center gap-2">
                       <button onClick={() => updateCartItemQuantity(i, item.quantity - 1)} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-lg">-</button>
                       <input type="number" value={item.quantity === 0 ? "" : item.quantity} onChange={(e) => updateCartItemQuantity(i, parseInt(e.target.value) || 0)} className="w-12 text-center bg-gray-50 border rounded-lg py-1.5 text-sm font-bold" />
-                      <button onClick={() => updateCartItemQuantity(i, item.quantity + 1)} className="w-9 h-9 rounded-full text-white flex items-center justify-center font-bold text-lg" style={{ background: "var(--tenant-primary)" }}>+</button>
+                      <button onClick={() => updateCartItemQuantity(i, item.quantity + 1)} className="w-9 h-9 rounded-full text-white flex items-center justify-center font-bold text-lg" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>+</button>
                     </div>
                     <input
                       value={item.notes || ""}
@@ -1045,7 +1045,7 @@ export default function KioskPage({
                   {(activeProduct.is_featured || activeProduct.labels.length > 0) && (
                     <div className="flex flex-wrap gap-1">
                       {activeProduct.is_featured && (
-                        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white shadow-xs" style={{ background: "var(--tenant-secondary, #ec4899)" }}>⭐ Unggulan</span>
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white shadow-xs" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>⭐ Unggulan</span>
                       )}
                       {activeProduct.labels.map((l) => (
                         <span key={l} className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 capitalize">
@@ -1067,7 +1067,7 @@ export default function KioskPage({
                       <div className="flex items-center gap-3">
                         <button onClick={() => setModalQuantity(Math.max(1, modalQuantity - 1))} className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-xl cursor-pointer">-</button>
                         <input type="number" value={modalQuantity || ""} onChange={(e) => setModalQuantity(Math.max(1, parseInt(e.target.value) || 1))} className="w-16 h-10 text-center text-lg font-bold border-b-2 bg-transparent outline-none p-1" style={{ borderColor: 'var(--tenant-primary)' }} />
-                        <button onClick={() => setModalQuantity(modalQuantity + 1)} className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-xl cursor-pointer" style={{ background: "var(--tenant-primary)" }}>+</button>
+                        <button onClick={() => setModalQuantity(modalQuantity + 1)} className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-xl cursor-pointer" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>+</button>
                       </div>
                     </div>
 

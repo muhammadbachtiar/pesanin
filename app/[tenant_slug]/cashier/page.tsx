@@ -994,7 +994,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       {/* ─── Header ─── */}
       <header
         className="px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between shadow-md gap-3"
-        style={{ background: "linear-gradient(135deg, var(--tenant-primary), var(--tenant-secondary, var(--tenant-primary)))" }}
+        style={{ background: "var(--tenant-primary)" }}
       >
         <div className="flex-1 min-w-0">
           <h1 className="text-white font-bold text-xl leading-none truncate flex items-center gap-2">
@@ -1042,8 +1042,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           </a>
           <button
             onClick={() => setNewOrderDrawer(true)}
-            className="flex items-center gap-2 bg-white font-bold text-sm px-4 py-2 rounded-xl shadow hover:shadow-md active:scale-95 transition-all"
-            style={{ color: "var(--tenant-primary)" }}
+            className="flex items-center gap-2 font-bold text-sm px-4 py-2 rounded-xl shadow hover:shadow-md active:scale-95 transition-all text-white"
+            style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}
           >
             <span className="text-lg leading-none">＋</span> <span className="hidden sm:inline">Pesanan Baru</span>
           </button>
@@ -1673,7 +1673,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 {cart.length > 0 && (
                   <span
                     className="ml-1 px-1.5 py-0.2 rounded-full text-[9px] font-black text-white"
-                    style={{ background: "var(--tenant-primary)" }}
+                    style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}
                   >
                     ●
                   </span>
@@ -1809,7 +1809,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     type="button"
                     onClick={() => setPosMobileTab("cart")}
                     className="w-full py-3.5 rounded-2xl text-white font-bold text-sm flex items-center justify-between px-4 shadow-md active:scale-95 transition-all"
-                    style={{ background: "var(--tenant-primary)" }}
+                    style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}
                   >
                     <span className="bg-white/25 px-2.5 py-0.5 rounded-full text-xs font-extrabold">
                       🛒 {cart.reduce((s, c) => s + c.quantity, 0)} Item
@@ -2046,7 +2046,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     )}
                     <div className="flex justify-between font-extrabold text-base pt-1 text-gray-900">
                       <span>Total Tagihan</span>
-                      <span style={{ color: "var(--tenant-primary)" }}>
+                        <span style={{ color: "var(--tenant-secondary, var(--tenant-primary))" }}>
                         Rp {cartTotal.toLocaleString("id-ID")}
                       </span>
                     </div>
