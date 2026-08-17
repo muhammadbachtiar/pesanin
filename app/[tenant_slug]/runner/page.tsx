@@ -13,6 +13,7 @@ import {
 import { getTenantBySlug } from "@/services/tenantService";
 import { useRealtimeOrders } from "@/hooks/useRealtime";
 import { supabase } from "@/lib/supabase";
+import { TenantRoleGuard } from "@/components/auth/TenantRoleGuard";
 import type { Order, Tenant, OrderItem } from "@/types";
 
 type LayoutMode = "board" | "tab";
@@ -214,16 +215,50 @@ export default function RunnerPage({ params }: { params: Promise<{ tenant_slug: 
 
   if (!tenant) return null;
 
+  if (tenant.business_logic.pos_only) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center p-6 text-center"
+        style={{ background: "#0f172a", color: "#f8fafc", fontFamily: "Inter, sans-serif" }}
+      >
+        <div className="max-w-md w-full bg-slate-800/90 border border-slate-700 p-8 rounded-3xl shadow-2xl space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center text-3xl mx-auto">
+            🏪
+          </div>
+          <h2 className="text-2xl font-black text-white">Mode POS Standalone Aktif</h2>
+          <p className="text-sm text-slate-400 leading-relaxed">
+            Outlet <strong>{tenant.name}</strong> beroperasi dalam mode POS kasir langsung tanpa alur pelayan / runner. Semua pesanan diselesaikan di kasir.
+          </p>
+          <div className="pt-2">
+            <a
+              href="cashier"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg transition-all"
+            >
+              <span>💳 Buka Layar Kasir</span>
+              <span>→</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "var(--color-dark-bg, #0f172a)",
-        color: "#f1f5f9",
-        fontFamily: "Inter, sans-serif",
-      }}
-      className="flex flex-col"
+    <TenantRoleGuard
+      tenantSlug={tenant?.slug || ""}
+      tenantId={tenant?.id || null}
+      isPosOnly={tenant?.business_logic?.pos_only ?? false}
+      allowedRoles={["RUNNER", "OWNER", "SUPER_ADMIN"]}
     >
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "var(--color-dark-bg, #0f172a)",
+          color: "#f1f5f9",
+          fontFamily: "Inter, sans-serif",
+        }}
+        className="flex flex-col"
+      >
       {/* Header */}
       <header
         className="px-4 sm:px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4 sticky top-0 z-50 shadow-md"
@@ -408,7 +443,8 @@ export default function RunnerPage({ params }: { params: Promise<{ tenant_slug: 
           </div>
         )}
       </main>
-    </div>
+      </div>
+    </TenantRoleGuard>
   );
 }
 

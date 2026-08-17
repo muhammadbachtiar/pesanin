@@ -79,6 +79,36 @@ export async function createOrder(
     }));
     await supabase.from("order_items").insert(itemRows);
 
+    // ── AUTO-DEDUCT STOCK (Fase 1 / Opsi 1A) ──────────────────────────────
+    // Kurangi stock_count per produk yang memiliki stok terhitung (non-null).
+    // Jika stok mencapai 0, otomatis set is_available = false.
+    const productIds = items
+        .map((i) => i.product_id)
+        .filter((id): id is string => Boolean(id));
+
+    if (productIds.length > 0) {
+        const { data: stockRows } = await supabase
+            .from("products")
+            .select("id, stock_count, is_available")
+            .in("id", productIds);
+
+        if (stockRows) {
+            for (const row of stockRows) {
+                if (row.stock_count === null) continue; // unlimited — skip
+                const ordered = items
+                    .filter((i) => i.product_id === row.id)
+                    .reduce((sum, i) => sum + i.quantity, 0);
+                const newStock = Math.max(0, (row.stock_count as number) - ordered);
+                const shouldDeactivate = newStock <= 0;
+                await supabase.from("products").update({
+                    stock_count: newStock,
+                    ...(shouldDeactivate ? { is_available: false } : {}),
+                }).eq("id", row.id);
+            }
+        }
+    }
+    // ── END AUTO-DEDUCT ───────────────────────────────────────────────────
+
     return orderData as Order;
 }
 
@@ -203,6 +233,43 @@ export async function voidOrder(
     reason: string,
     cashierProfileId: string
 ): Promise<boolean> {
+    // ── AUTO-RESTORE STOCK (Fase 1 / Opsi 1A) ────────────────────────────
+    // Ambil order_items sebelum di-cancel, kembalikan stok ke masing-masing produk.
+    const { data: orderItems } = await supabase
+        .from("order_items")
+        .select("product_id, quantity")
+        .eq("order_id", orderId);
+
+    if (orderItems && orderItems.length > 0) {
+        const productIds = (orderItems as { product_id: string | null; quantity: number }[])
+            .map((i) => i.product_id)
+            .filter((id): id is string => Boolean(id));
+
+        if (productIds.length > 0) {
+            const { data: stockRows } = await supabase
+                .from("products")
+                .select("id, stock_count, is_available")
+                .in("id", productIds);
+
+            if (stockRows) {
+                for (const row of stockRows as { id: string; stock_count: number | null; is_available: boolean }[]) {
+                    if (row.stock_count === null) continue; // unlimited — skip
+                    const returned = (orderItems as { product_id: string | null; quantity: number }[])
+                        .filter((i) => i.product_id === row.id)
+                        .reduce((sum: number, i: { product_id: string | null; quantity: number }) => sum + i.quantity, 0);
+                    const newStock = row.stock_count + returned;
+                    // Aktifkan kembali produk jika sebelumnya nonaktif karena stok habis
+                    const shouldReactivate = !row.is_available && newStock > 0;
+                    await supabase.from("products").update({
+                        stock_count: newStock,
+                        ...(shouldReactivate ? { is_available: true } : {}),
+                    }).eq("id", row.id);
+                }
+            }
+        }
+    }
+    // ── END AUTO-RESTORE ─────────────────────────────────────────────────
+
     const { error } = await supabase.from("orders").update({
         order_status: "cancelled",
         verification_status: "rejected",

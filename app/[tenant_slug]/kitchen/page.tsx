@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { getOrdersByTenant, getOrderById, updateOrderStatus, parseCustomerNotes, buildCustomerNotes, updateOrderCookedItems } from "@/services/orderService";
 import { getTenantBySlug } from "@/services/tenantService";
 import { useRealtimeOrders } from "@/hooks/useRealtime";
+import { TenantRoleGuard } from "@/components/auth/TenantRoleGuard";
 import type { Order, OrderItem, Tenant } from "@/types";
 
 type ViewMode = "order" | "menu";
@@ -335,26 +336,60 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
 
   if (!tenant) return null;
 
-  return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "var(--color-dark-bg, #0f172a)",
-        color: "#f1f5f9",
-        fontFamily: "Inter, sans-serif",
-      }}
-    >
-      {/* Header */}
-      <header
-        className="px-4 sm:px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4"
-        style={{ borderColor: "var(--color-dark-border, #334155)", background: "#1e293b" }}
+  if (tenant.business_logic.pos_only) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center p-6 text-center"
+        style={{ background: "#0f172a", color: "#f8fafc", fontFamily: "Inter, sans-serif" }}
       >
-        <div>
-          <h1 className="font-bold text-xl leading-none text-white">{tenant.name}</h1>
-          <p className="text-xs sm:text-sm mt-1" style={{ color: "#94a3b8" }}>
-            Layar Dapur — <span className="font-bold text-white">{orders.length}</span> pesanan aktif
+        <div className="max-w-md w-full bg-slate-800/90 border border-slate-700 p-8 rounded-3xl shadow-2xl space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center text-3xl mx-auto">
+            🏪
+          </div>
+          <h2 className="text-2xl font-black text-white">Mode POS Standalone Aktif</h2>
+          <p className="text-sm text-slate-400 leading-relaxed">
+            Outlet <strong>{tenant.name}</strong> beroperasi dalam mode POS kasir langsung tanpa alur dapur terpisah. Semua pesanan langsung diproses di meja kasir.
           </p>
+          <div className="pt-2">
+            <a
+              href="cashier"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg transition-all"
+            >
+              <span>💳 Buka Layar Kasir</span>
+              <span>→</span>
+            </a>
+          </div>
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <TenantRoleGuard
+      tenantSlug={tenant?.slug || ""}
+      tenantId={tenant?.id || null}
+      isPosOnly={tenant?.business_logic?.pos_only ?? false}
+      allowedRoles={["KITCHEN", "OWNER", "SUPER_ADMIN"]}
+    >
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "var(--color-dark-bg, #0f172a)",
+          color: "#f1f5f9",
+          fontFamily: "Inter, sans-serif",
+        }}
+      >
+        {/* Header */}
+        <header
+          className="px-4 sm:px-6 py-4 border-b flex flex-wrap items-center justify-between gap-4"
+          style={{ borderColor: "var(--color-dark-border, #334155)", background: "#1e293b" }}
+        >
+          <div>
+            <h1 className="font-bold text-xl leading-none text-white">{tenant.name}</h1>
+            <p className="text-xs sm:text-sm mt-1" style={{ color: "#94a3b8" }}>
+              Layar Dapur — <span className="font-bold text-white">{orders.length}</span> pesanan aktif
+            </p>
+          </div>
 
         {/* View Mode Toggle Switch */}
         <div className="flex items-center bg-slate-900/80 p-1 rounded-xl border border-slate-700">
@@ -702,6 +737,7 @@ export default function KitchenPage({ params }: { params: Promise<{ tenant_slug:
 
       </div>
     </div>
+  </TenantRoleGuard>
   );
 }
 

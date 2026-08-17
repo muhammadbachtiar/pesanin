@@ -6,6 +6,7 @@ import { getTenantBySlug } from "@/services/tenantService";
 import { getCategoriesWithProducts, getProductsByTenant } from "@/services/productService";
 import { createOrder, generateQueueNumber, getActiveOrderByTable, buildCustomerNotes } from "@/services/orderService";
 import { validateTableToken } from "@/services/tableService";
+import { getSupabaseClient } from "@/lib/supabase";
 import type { Tenant, Category, Product, CartItem, OrderType, TableRecord } from "@/types";
 import { ProductCard } from "@/components/ProductCard";
 
@@ -47,6 +48,9 @@ export default function KioskPage({
   const [tableInputError, setTableInputError] = useState<string | null>(null);
   const [isCheckingTable, setIsCheckingTable] = useState(false);
   const slugRef = useRef<string>("");
+  // Ref untuk cleanup realtime channel produk saat unmount
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const productChannelRef = useRef<any>(null);
 
   useEffect(() => {
     async function init() {
@@ -75,8 +79,33 @@ export default function KioskPage({
       if (saved) setCart(JSON.parse(saved));
 
       setTimeout(() => setScreen("order_type"), 2200);
+
+      // ── REALTIME: Subscribe products table — Kiosk auto-disables card saat stok habis ──
+      // Info stok (angka) TIDAK ditampilkan di Kiosk, hanya status aktif/nonaktif.
+      const supabase = getSupabaseClient();
+      const productChannel = supabase
+        .channel(`kiosk-products-${t.id}`)
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "products", filter: `tenant_id=eq.${t.id}` },
+          (payload: { new: { id: string; is_available: boolean; stock_count: number | null } }) => {
+            setProducts((prev) =>
+              prev.map((p) =>
+                p.id === payload.new.id
+                  ? { ...p, is_available: payload.new.is_available, stock_count: payload.new.stock_count }
+                  : p
+              )
+            );
+          }
+        )
+        .subscribe();
+      productChannelRef.current = productChannel;
     }
     init();
+    return () => {
+      const supabase = getSupabaseClient();
+      if (productChannelRef.current) supabase.removeChannel(productChannelRef.current);
+    };
   }, [params, searchParams]);
 
   const saveCart = (items: CartItem[]) => {

@@ -1,9 +1,14 @@
 -- ============================================================
--- PESANIN APP — Supabase PostgreSQL Schema (Rev 3 — Final)
--- Changes from Rev 2:
+-- PESANIN APP — Supabase PostgreSQL Schema (Rev 4)
+-- Changes from Rev 3:
+--   - user_role ENUM: tambah RUNNER (untuk halaman pengantaran)
+--   - products: REPLICA IDENTITY FULL aktifkan untuk Realtime event
+--     UPDATE lengkap (old+new) agar Kiosk bisa terima notifikasi stok habis
+--   - profiles RLS: owner_manage_staff_profiles (hanya CASHIER/KITCHEN/RUNNER)
+--   - Fase 1 stock: auto-deduct/restore di application layer (orderService.ts)
+-- Changes from Rev 3 (tetap dipertahankan):
 --   - payment_method_type: gateway|manual|cash → gateway|qris_static|bank_transfer|cash
---     (records the specific channel used in orders, not just the mode)
---   - business_logic.payment_mode: "gateway" | "manual" (cash is a channel inside manual)
+--   - business_logic.payment_mode: "gateway" | "manual" (cash adalah channel di manual)
 --   - orders: added created_by_cashier + cashier_profile_id (for manual cashier orders)
 --   - manual_payment_channels: cash added as a valid channel type
 -- ============================================================
@@ -17,7 +22,13 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- 1. ENUM TYPES
 -- ============================================================
 
-CREATE TYPE user_role AS ENUM ('SUPER_ADMIN', 'OWNER', 'CASHIER', 'KITCHEN');
+-- Role hierarki:
+--   SUPER_ADMIN : platform level, akses semua tenant
+--   OWNER       : admin outlet/tenant, dibuat oleh Super Admin
+--   CASHIER     : kasir, akses /[slug]/cashier
+--   KITCHEN     : dapur, akses /[slug]/kitchen
+--   RUNNER      : pengantaran/serve, akses /[slug]/runner
+CREATE TYPE user_role AS ENUM ('SUPER_ADMIN', 'OWNER', 'CASHIER', 'KITCHEN', 'RUNNER');
 
 CREATE TYPE payment_timing_type AS ENUM ('prepaid', 'postpaid');
 
@@ -222,6 +233,10 @@ CREATE TABLE products (
 
     is_available    BOOLEAN NOT NULL DEFAULT TRUE,    -- toggle kasir (realtime)
     stock_count     INTEGER,                          -- NULL = tanpa batas
+    -- stock_count dikurangi otomatis saat order dibuat (application layer: createOrder)
+    -- stock_count dikembalikan otomatis saat order di-void (application layer: voidOrder)
+    -- Jika stock_count <= 0, is_available otomatis diset FALSE oleh application layer
+    -- Info stok (angka) hanya ditampilkan di halaman Kasir, TIDAK di Kiosk
 
     labels          TEXT[] DEFAULT ARRAY[]::TEXT[],   -- 'best_seller', 'new', 'spicy', dll
     sort_order      INTEGER NOT NULL DEFAULT 0,
@@ -232,7 +247,18 @@ CREATE TABLE products (
 );
 
 COMMENT ON COLUMN products.is_featured IS 'true = tampil paling atas section, sort_order diabaikan.';
-COMMENT ON COLUMN products.stock_count IS 'NULL = tanpa batas. 0 = habis (auto set is_available=false via trigger opsional).';
+COMMENT ON COLUMN products.is_available IS
+    'FALSE jika stok habis (auto oleh application layer) atau dinonaktifkan kasir manual.
+     Kiosk subscribe realtime UPDATE tabel ini untuk auto-disable card tanpa reload.';
+COMMENT ON COLUMN products.stock_count IS
+    'NULL = unlimited. Integer = jumlah stok terhitung.
+     Dikurangi saat createOrder, dikembalikan saat voidOrder (app layer).
+     Jika mencapai 0 → is_available otomatis FALSE. Info angka hanya tampil di Kasir.';
+
+-- PENTING: REPLICA IDENTITY FULL diperlukan agar Supabase Realtime
+-- mengirim payload lengkap (old + new) pada event UPDATE.
+-- Ini memungkinkan Kiosk (anon) menerima notifikasi saat is_available berubah FALSE.
+ALTER TABLE products REPLICA IDENTITY FULL;
 
 -- ============================================================
 -- 7. PRODUCT VARIANTS
@@ -630,7 +656,7 @@ INSERT INTO tables (tenant_id, table_number, display_name) VALUES
     ('00000000-0000-0000-0000-000000000001', 'VIP-1', 'Meja VIP 1');
 
 -- ============================================================
--- SELESAI — Next Steps:
+-- SELESAI — Next Steps (Fresh Install):
 -- 1. Run file ini di Supabase SQL Editor
 -- 2. Buat akun Super Admin di Authentication → Users
 -- 3. INSERT INTO profiles (user_id, role) VALUES ('[auth-uid]', 'SUPER_ADMIN');
@@ -640,4 +666,107 @@ INSERT INTO tables (tenant_id, table_number, display_name) VALUES
 --    SUPABASE_SERVICE_ROLE_KEY=eyJ...   ← JANGAN expose ke client!
 -- 5. Notifikasi audio kasir: gunakan Web Audio API atau <audio> tag
 --    di Supabase Realtime INSERT listener channel orders
+-- ============================================================
+
+-- ============================================================
+-- MIGRATION PATCH — Untuk database yang sudah berjalan (Rev 3 → Rev 4)
+-- Jika Anda melakukan fresh install dari file ini, SKIP bagian ini
+-- (sudah tercakup dalam DDL di atas).
+-- Jika Anda sudah menjalankan schema Rev 3 sebelumnya, jalankan
+-- bagian ini saja di Supabase SQL Editor.
+-- ============================================================
+
+-- ── PATCH 1: Tambah RUNNER ke ENUM user_role ─────────────────────────────
+-- Safe: hanya menambahkan jika belum ada
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_enum
+    WHERE enumtypid = 'user_role'::regtype
+      AND enumlabel  = 'RUNNER'
+  ) THEN
+    ALTER TYPE user_role ADD VALUE 'RUNNER';
+    RAISE NOTICE 'PATCH 1: ENUM value RUNNER ditambahkan ke user_role.';
+  ELSE
+    RAISE NOTICE 'PATCH 1: SKIP — RUNNER sudah ada di user_role.';
+  END IF;
+END $$;
+
+-- ── PATCH 2: REPLICA IDENTITY FULL untuk Realtime Kiosk ─────────────────
+-- Memastikan Supabase Realtime mengirim payload lengkap (old + new)
+-- saat tabel products di-UPDATE. Diperlukan agar Kiosk (anon subscriber)
+-- bisa menerima notifikasi ketika is_available berubah FALSE (stok habis).
+ALTER TABLE products REPLICA IDENTITY FULL;
+
+-- Verifikasi: SELECT relname, relreplident FROM pg_class WHERE relname = 'products';
+-- Hasilnya harus 'f' (FULL) ✓
+
+-- ── PATCH 3: Verifikasi RLS anon_read_products aktif ────────────────────
+-- Policy ini wajib ada agar anon subscriber bisa terima event Realtime UPDATE.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename   = 'products'
+      AND policyname  = 'anon_read_products'
+  ) THEN
+    CREATE POLICY "anon_read_products"
+      ON products FOR SELECT TO anon
+      USING (is_available = TRUE);
+    RAISE NOTICE 'PATCH 3: Policy anon_read_products dibuat.';
+  ELSE
+    RAISE NOTICE 'PATCH 3: SKIP — anon_read_products sudah ada.';
+  END IF;
+END $$;
+
+-- ── PATCH 4: RLS Owner hanya kelola staf-nya (CASHIER/KITCHEN/RUNNER) ───
+-- Ganti policy owner_manage_profiles lama yang terlalu luas
+DROP POLICY IF EXISTS "owner_manage_profiles"       ON profiles;
+DROP POLICY IF EXISTS "owner_manage_staff_profiles" ON profiles;
+
+CREATE POLICY "owner_manage_staff_profiles"
+  ON profiles FOR ALL TO authenticated
+  USING (
+    auth_user_role() = 'OWNER'
+    AND tenant_id = auth_tenant_id()
+    AND role IN ('CASHIER', 'KITCHEN', 'RUNNER')
+  )
+  WITH CHECK (
+    auth_user_role() = 'OWNER'
+    AND tenant_id = auth_tenant_id()
+    AND role IN ('CASHIER', 'KITCHEN', 'RUNNER')
+  );
+
+-- ── PATCH 5: Index baru untuk query staf per tenant (Owner portal) ───────
+CREATE INDEX IF NOT EXISTS idx_profiles_tenant_role
+  ON profiles(tenant_id, role)
+  WHERE is_active = TRUE;
+
+-- ── Catatan Fase 1 (Aplikasi) ─────────────────────────────────────────────
+-- Tidak ada perubahan DDL untuk Fase 1. Logika stok sepenuhnya di app layer:
+--   • createOrder (services/orderService.ts) → kurangi stock_count, set is_available=false jika 0
+--   • voidOrder   (services/orderService.ts) → kembalikan stock_count, aktifkan kembali produk
+--   • Info angka stok HANYA tampil di halaman Kasir (showStockBadge prop).
+--   • Kiosk hanya menerima sinyal aktif/nonaktif via Realtime.
+
+-- ── Catatan Fase 2 (Aplikasi) ─────────────────────────────────────────────
+-- Semua perubahan role & akses ditangani di application layer:
+--   • types/index.ts        → UserRole ditambah 'RUNNER'
+--   • login/page.tsx        → RUNNER diredirect ke /[slug]/runner setelah login
+--   • components/auth/TenantRoleGuard.tsx → guard auth + isolasi tenant + role check
+--   • services/staffService.ts            → client wrapper CRUD akun staf
+--   • app/api/admin/staff/route.ts        → server API buat akun (service_role key)
+--   • app/super-admin/page.tsx            → section Manajemen Akun Staf
+
+-- ── Verifikasi Akhir Semua Patch ─────────────────────────────────────────
+-- 1. Cek RUNNER ada:
+--    SELECT enumlabel FROM pg_enum WHERE enumtypid='user_role'::regtype ORDER BY enumsortorder;
+-- 2. Cek REPLICA IDENTITY:
+--    SELECT relreplident FROM pg_class WHERE relname='products'; -- hasilnya: 'f'
+-- 3. Cek Realtime Publication:
+--    SELECT * FROM pg_publication_tables WHERE pubname='supabase_realtime';
+--    (Harus ada: orders, order_items, products, tables)
+-- 4. Cek semua RLS profiles:
+--    SELECT policyname, cmd FROM pg_policies WHERE tablename='profiles' ORDER BY policyname;
 -- ============================================================

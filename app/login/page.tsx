@@ -58,6 +58,7 @@ export default function LoginPage() {
         }
         if (profile.role === "CASHIER") router.push(`/${slug}/cashier`);
         else if (profile.role === "KITCHEN") router.push(`/${slug}/kitchen`);
+        else if (profile.role === "RUNNER") router.push(`/${slug}/runner`);
         else if (profile.role === "OWNER") router.push(`/${slug}/admin`);
         else router.push(`/${slug}/kiosk`);
       }

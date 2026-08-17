@@ -16,8 +16,10 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { createTenant, updateTenant } from "@/services/tenantService";
 import { signOut, getCurrentProfile } from "@/services/authService";
+import { getStaffByTenant, createStaffAccount, toggleStaffActive, ROLE_LABEL, ROLE_COLOR } from "@/services/staffService";
+import type { StaffListItem } from "@/services/staffService";
 import { useRouter } from "next/navigation";
-import type { Tenant, Category, Product, BusinessLogic, FinanceConfig, ReceiptConfig, ManualPaymentChannel } from "@/types";
+import type { Tenant, Category, Product, BusinessLogic, FinanceConfig, ReceiptConfig, ManualPaymentChannel, UserRole } from "@/types";
 
 const STEPS = ["Identitas & Branding", "Konfigurasi Bisnis", "Akun Owner", "Review & Selesai"];
 
@@ -95,6 +97,63 @@ export default function SuperAdminPage() {
   const [step1Form] = Form.useForm();
   const [step2Form] = Form.useForm();
   const [step3Form] = Form.useForm();
+  const [staffForm] = Form.useForm();
+
+  // ── Manajemen Akun Staf (Fase 2) ──────────────────────────────────────
+  const [staffSection, setStaffSection] = useState(false); // collapsed by default
+  const [staffTenantFilter, setStaffTenantFilter] = useState<string | null>(null);
+  const [staffList, setStaffList] = useState<StaffListItem[]>([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [staffModalOpen, setStaffModalOpen] = useState(false);
+  const [staffSaving, setStaffSaving] = useState(false);
+
+  const loadStaff = useCallback(async (tenantId: string | null) => {
+    setStaffLoading(true);
+    if (tenantId) {
+      const data = await getStaffByTenant(tenantId);
+      setStaffList(data);
+    } else {
+      // Load semua tenant satu per satu dan gabungkan (Super Admin)
+      const all: StaffListItem[] = [];
+      for (const t of tenants) {
+        const data = await getStaffByTenant(t.id);
+        all.push(...data);
+      }
+      setStaffList(all);
+    }
+    setStaffLoading(false);
+  }, [tenants]);
+
+  const handleCreateStaff = async (values: { email: string; password: string; fullName: string; role: UserRole; tenantId: string }) => {
+    setStaffSaving(true);
+    const result = await createStaffAccount({
+      email: values.email,
+      password: values.password,
+      fullName: values.fullName,
+      role: values.role,
+      tenantId: values.tenantId || null,
+    });
+    setStaffSaving(false);
+    if (!result.success) {
+      message.error(result.error ?? "Gagal membuat akun");
+      return;
+    }
+    message.success("Akun staf berhasil dibuat!");
+    setStaffModalOpen(false);
+    staffForm.resetFields();
+    await loadStaff(staffTenantFilter);
+  };
+
+  const handleToggleStaff = async (profileId: string, currentActive: boolean) => {
+    const ok = await toggleStaffActive(profileId, !currentActive);
+    if (ok) {
+      message.success(currentActive ? "Akun dinonaktifkan" : "Akun diaktifkan");
+      await loadStaff(staffTenantFilter);
+    } else {
+      message.error("Gagal mengubah status akun");
+    }
+  };
+  // ─────────────────────────────────────────────────────────────────────
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -145,11 +204,11 @@ export default function SuperAdminPage() {
 
   const nextStep = async () => {
     if (wizardStep === 0) {
-      try { const v = await step1Form.validateFields(); mergeStep(v); setWizardStep(1); } catch {}
+      try { const v = await step1Form.validateFields(); mergeStep(v); setWizardStep(1); } catch { }
     } else if (wizardStep === 1) {
-      try { const v = await step2Form.validateFields(); mergeStep(v); setWizardStep(editingTenant ? 3 : 2); } catch {}
+      try { const v = await step2Form.validateFields(); mergeStep(v); setWizardStep(editingTenant ? 3 : 2); } catch { }
     } else if (wizardStep === 2) {
-      try { const v = await step3Form.validateFields(); mergeStep(v); setWizardStep(3); } catch {}
+      try { const v = await step3Form.validateFields(); mergeStep(v); setWizardStep(3); } catch { }
     }
   };
 
@@ -286,7 +345,7 @@ export default function SuperAdminPage() {
       render: (_: unknown, t: Tenant) => (
         <Space size={4} wrap>
           {t.business_logic.pos_only
-            ? <Tag color="purple" style={{ fontWeight: 700 }}>🏪 POS Murni</Tag>
+            ? <Tag color="purple" style={{ fontWeight: 700 }}>🏪 POS</Tag>
             : <Tag>{t.business_logic.payment_timing === "prepaid" ? "Bayar Dulu" : "Pay Later"}</Tag>
           }
           <Tag>{t.business_logic.payment_mode === "gateway" ? "Gateway" : "Manual"}</Tag>
@@ -303,26 +362,33 @@ export default function SuperAdminPage() {
     },
     {
       title: "Aksi",
-      render: (_: unknown, t: Tenant) => (
-        <Space wrap size={4}>
-          <Tooltip title="Edit Tenant"><Button icon={<EditOutlined />} size="small" onClick={() => openEdit(t)} /></Tooltip>
-          <Tooltip title="Kelola Menu"><Button icon={<BookOutlined />} size="small" onClick={() => openMenu(t)}>Menu</Button></Tooltip>
-          <Tooltip title="Buka Kiosk"><Button size="small" onClick={() => window.open(`/${t.slug}/kiosk`, "_blank")}>Kiosk</Button></Tooltip>
-          <Tooltip title="Buka Kasir"><Button size="small" onClick={() => window.open(`/${t.slug}/cashier`, "_blank")}>Kasir</Button></Tooltip>
-          <Tooltip title="Buka Dapur"><Button size="small" onClick={() => window.open(`/${t.slug}/kitchen`, "_blank")}>Dapur</Button></Tooltip>
-          <Tooltip title="Buka Runner"><Button size="small" onClick={() => window.open(`/${t.slug}/runner`, "_blank")}>Runner</Button></Tooltip>
-          <Popconfirm
-            title="Hapus tenant ini?"
-            description="Semua data (menu, pesanan, akun staff) akan ikut terhapus permanen."
-            onConfirm={() => handleDelete(t.id)}
-            okText="Ya, Hapus"
-            okButtonProps={{ danger: true }}
-            cancelText="Batal"
-          >
-            <Button icon={<DeleteOutlined />} size="small" danger />
-          </Popconfirm>
-        </Space>
-      ),
+      render: (_: unknown, t: Tenant) => {
+        const isPos = t.business_logic.pos_only === true;
+        return (
+          <Space wrap size={4}>
+            <Tooltip title="Edit Tenant"><Button icon={<EditOutlined />} size="small" onClick={() => openEdit(t)} /></Tooltip>
+            <Tooltip title="Kelola Menu"><Button icon={<BookOutlined />} size="small" onClick={() => openMenu(t)}>Menu</Button></Tooltip>
+            <Tooltip title="Buka Kiosk"><Button size="small" onClick={() => window.open(`/${t.slug}/kiosk`, "_blank")}>Kiosk</Button></Tooltip>
+            <Tooltip title="Buka Kasir"><Button size="small" onClick={() => window.open(`/${t.slug}/cashier`, "_blank")}>Kasir</Button></Tooltip>
+            {!isPos && (
+              <>
+                <Tooltip title="Buka Dapur"><Button size="small" onClick={() => window.open(`/${t.slug}/kitchen`, "_blank")}>Dapur</Button></Tooltip>
+                <Tooltip title="Buka Runner"><Button size="small" onClick={() => window.open(`/${t.slug}/runner`, "_blank")}>Runner</Button></Tooltip>
+              </>
+            )}
+            <Popconfirm
+              title="Hapus tenant ini?"
+              description="Semua data (menu, pesanan, akun staff) akan ikut terhapus permanen."
+              onConfirm={() => handleDelete(t.id)}
+              okText="Ya, Hapus"
+              okButtonProps={{ danger: true }}
+              cancelText="Batal"
+            >
+              <Button icon={<DeleteOutlined />} size="small" danger />
+            </Popconfirm>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -372,15 +438,65 @@ export default function SuperAdminPage() {
     </Form>,
 
     /* Step 1 — Bisnis */
-    <Form key="s2" form={step2Form} layout="vertical" requiredMark="optional">
-      <Divider style={{ margin: "0 0 16px", fontSize: 13 }}>Alur Pembayaran</Divider>
+    <Form
+      key="s2"
+      form={step2Form}
+      layout="vertical"
+      requiredMark="optional"
+      onValuesChange={(changedValues) => {
+        if (changedValues.pos_only !== undefined) {
+          if (changedValues.pos_only) {
+            step2Form.setFieldsValue({
+              payment_timing: "prepaid",
+              require_cashier_verification: false,
+            });
+          }
+        }
+      }}
+    >
+      <Divider style={{ margin: "0 0 16px", fontSize: 13 }}>Mode Operasional</Divider>
+      <Form.Item
+        name="pos_only"
+        valuePropName="checked"
+        label={
+          <span style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 18 }}>🏪</span> Aktifkan Mode POS (Standalone)
+          </span>
+        }
+        extra=""
+      >
+        <Switch checkedChildren="POS Aktif" unCheckedChildren="Normal" />
+      </Form.Item>
+      <div style={{ background: "#faf5ff", border: "1px solid #d8b4fe", borderRadius: 10, padding: "12px 16px", marginBottom: 16, marginTop: -4 }}>
+        <p style={{ margin: 0, color: "#6b21a8", fontSize: 12, lineHeight: 1.7 }}>
+          <b>🏪 Mode POS (Kafe/Resto Cepat Saji & Toko):</b> Cocok untuk outlet tanpa alur dapur terpisah.<br />
+          Saat diaktifkan: <b>Wajib Pre-paid (Bayar di Depan)</b>, pesanan otomatis <b>Selesai</b> setelah lunas, dan Kasir dilengkapi tab <b>Antrian Bayar (Kiosk/Self-Order)</b> & <b>Riwayat Transaksi</b>.
+        </p>
+      </div>
+
+      <Divider style={{ margin: "12px 0 16px", fontSize: 13 }}>Alur Pembayaran & Penomoran</Divider>
       <Row gutter={12}>
         <Col span={12}>
-          <Form.Item name="payment_timing" label="Waktu Bayar" rules={[{ required: true }]}>
-            <Select size="large">
-              <Select.Option value="prepaid">💳 Bayar di Depan (Prepaid)</Select.Option>
-              <Select.Option value="postpaid">🍽️ Bayar Setelah Makan (Postpaid)</Select.Option>
-            </Select>
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, cur) => prev.pos_only !== cur.pos_only}
+          >
+            {({ getFieldValue }) => {
+              const posActive = getFieldValue("pos_only");
+              return (
+                <Form.Item
+                  name="payment_timing"
+                  label="Waktu Bayar"
+                  rules={[{ required: true }]}
+                  extra={posActive ? "Terkunci: Mode POS wajib bayar di awal (Pre-paid)" : undefined}
+                >
+                  <Select size="large" disabled={posActive}>
+                    <Select.Option value="prepaid">💳 Bayar di Depan (Prepaid)</Select.Option>
+                    <Select.Option value="postpaid">🍽️ Bayar Setelah Makan (Postpaid)</Select.Option>
+                  </Select>
+                </Form.Item>
+              );
+            }}
           </Form.Item>
         </Col>
         <Col span={12}>
@@ -396,37 +512,32 @@ export default function SuperAdminPage() {
         <Col span={12}>
           <Form.Item name="numbering" label="Sistem Penomoran" rules={[{ required: true }]}>
             <Select size="large">
-              <Select.Option value="queue">🔢 Nomor Antrian</Select.Option>
-              <Select.Option value="table">🪑 Nomor Meja</Select.Option>
+              <Select.Option value="queue">🔢 Nomor Antrian (Cocok untuk POS / Kafe)</Select.Option>
+              <Select.Option value="table">🪑 Nomor Meja (Dine-in Kafe/Resto)</Select.Option>
             </Select>
           </Form.Item>
         </Col>
         <Col span={12}>
-          <Form.Item name="require_cashier_verification" label="Verifikasi Kasir" valuePropName="checked" extra="Kasir approve sebelum masuk dapur (cocok untuk postpaid)">
-            <Switch checkedChildren="Aktif" unCheckedChildren="Nonaktif" />
+          <Form.Item
+            noStyle
+            shouldUpdate={(prev, cur) => prev.pos_only !== cur.pos_only}
+          >
+            {({ getFieldValue }) => {
+              const posActive = getFieldValue("pos_only");
+              return (
+                <Form.Item
+                  name="require_cashier_verification"
+                  label="Verifikasi Kasir"
+                  valuePropName="checked"
+                  extra={posActive ? "Nonaktif: Transaksi POS diverifikasi via pembayaran" : "Kasir approve sebelum masuk dapur (cocok untuk postpaid)"}
+                >
+                  <Switch checkedChildren="Aktif" unCheckedChildren="Nonaktif" disabled={posActive} />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
         </Col>
       </Row>
-
-      <Divider style={{ margin: "12px 0", fontSize: 13 }}>Mode Operasional</Divider>
-      <Form.Item
-        name="pos_only"
-        valuePropName="checked"
-        label={
-          <span style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 18 }}>🏪</span> Aktifkan Mode POS Murni (Standalone)
-          </span>
-        }
-        extra=""
-      >
-        <Switch checkedChildren="POS Aktif" unCheckedChildren="Normal" />
-      </Form.Item>
-      <div style={{ background: "#faf5ff", border: "1px solid #d8b4fe", borderRadius: 10, padding: "12px 16px", marginBottom: 8, marginTop: -4 }}>
-        <p style={{ margin: 0, color: "#6b21a8", fontSize: 12, lineHeight: 1.7 }}>
-          <b>🏪 Mode POS Murni</b> cocok untuk usaha yang <b>tidak memiliki dapur terpisah</b> (warung, kantin, toko, dll).<br />
-          Saat diaktifkan: <b>pembayaran wajib di awal (pre-paid)</b>, pesanan langsung berstatus <b>Selesai</b> setelah bayar (skip dapur/runner), dan tab <b>Menunggu</b> disembunyikan dari kasir.
-        </p>
-      </div>
       <Divider style={{ margin: "12px 0", fontSize: 13 }}>Keuangan</Divider>
       <Row gutter={12}>
         <Col span={8}><Form.Item name="tax_percentage" label="PPN (%)"><InputNumber min={0} max={100} style={{ width: "100%" }} /></Form.Item></Col>
@@ -473,7 +584,7 @@ export default function SuperAdminPage() {
         <Row gutter={[16, 8]}>
           <Col span={12}><ReviewItem label="Tagline" value={wizardData.subtitle} /></Col>
           <Col span={12}><ReviewItem label="Warna Utama" value={<span style={{ display: "flex", gap: 6, alignItems: "center" }}><span style={{ width: 14, height: 14, borderRadius: 4, background: wizardData.primary_color, display: "inline-block" }} />{wizardData.primary_color}</span>} /></Col>
-          <Col span={12}><ReviewItem label="Mode Operasional" value={wizardData.pos_only ? "🏪 POS Murni (Standalone)" : "Normal (Kafe/Resto)"} /></Col>
+          <Col span={12}><ReviewItem label="Mode Operasional" value={wizardData.pos_only ? "🏪 POS (Standalone)" : "Normal (Kafe/Resto)"} /></Col>
           <Col span={12}><ReviewItem label="Waktu Bayar" value={wizardData.pos_only ? "Pre-Paid (Otomatis)" : wizardData.payment_timing === "prepaid" ? "Bayar di Depan" : "Pay Later"} /></Col>
           <Col span={12}><ReviewItem label="Mode" value={wizardData.payment_mode === "manual" ? "Manual" : "Gateway"} /></Col>
           <Col span={12}><ReviewItem label="Penomoran" value={wizardData.numbering === "queue" ? "Antrian" : "Meja"} /></Col>
@@ -581,7 +692,157 @@ export default function SuperAdminPage() {
             />
           </div>
         </motion.div>
+
+        {/* ─── Manajemen Akun Staf (Fase 2) ─── */}
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} style={{ marginTop: 24 }}>
+          <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e2e8f0", boxShadow: "0 1px 4px rgba(0,0,0,.04)", overflow: "hidden" }}>
+            {/* Section header — collapsible */}
+            <div
+              style={{ padding: "16px 20px", borderBottom: staffSection ? "1px solid #f1f5f9" : "none", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}
+              onClick={() => {
+                if (!staffSection) loadStaff(staffTenantFilter);
+                setStaffSection(!staffSection);
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <UserOutlined style={{ color: "#6366f1", fontSize: 15 }} />
+                </div>
+                <div>
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: "#0f172a" }}>Manajemen Akun Staf</p>
+                  <p style={{ margin: 0, fontSize: 12, color: "#94a3b8" }}>Buat & kelola akun Kasir, Dapur, Runner, dan Owner untuk semua tenant</p>
+                </div>
+              </div>
+              <span style={{ fontSize: 13, color: "#6366f1", fontWeight: 700 }}>{staffSection ? "▲ Tutup" : "▼ Buka"}</span>
+            </div>
+
+            {staffSection && (
+              <div style={{ padding: "20px" }}>
+                {/* Toolbar */}
+                <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+                  <Select
+                    placeholder="Filter Tenant"
+                    style={{ width: 220 }}
+                    allowClear
+                    value={staffTenantFilter}
+                    onChange={(v) => { setStaffTenantFilter(v ?? null); loadStaff(v ?? null); }}
+                    options={[
+                      { value: null, label: "Semua Tenant" },
+                      ...tenants.map((t) => ({ value: t.id, label: t.name })),
+                    ]}
+                  />
+                  <button
+                    onClick={() => { staffForm.resetFields(); setStaffModalOpen(true); }}
+                    style={{ display: "flex", alignItems: "center", gap: 7, background: "#09090b", color: "#fff", border: "none", borderRadius: 9, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+                  >
+                    <PlusOutlined style={{ fontSize: 12 }} /> Tambah Akun Staf
+                  </button>
+                </div>
+
+                {/* Staff Table */}
+                <Table
+                  dataSource={staffList}
+                  rowKey="id"
+                  loading={staffLoading}
+                  size="small"
+                  pagination={{ pageSize: 10, showSizeChanger: false }}
+                  locale={{ emptyText: <Empty description="Belum ada akun staf" /> }}
+                  columns={[
+                    {
+                      title: "Nama", dataIndex: "full_name",
+                      render: (v: string | null) => <span style={{ fontWeight: 600, color: "#0f172a" }}>{v ?? "(Tanpa Nama)"}</span>,
+                    },
+                    {
+                      title: "Role", dataIndex: "role",
+                      render: (r: UserRole) => {
+                        const c = ROLE_COLOR[r];
+                        return <Tag style={{ background: c.bg, color: c.text, border: "none", fontWeight: 700 }}>{ROLE_LABEL[r]}</Tag>;
+                      },
+                    },
+                    {
+                      title: "Tenant", dataIndex: "tenant_id",
+                      render: (tid: string | null) => {
+                        if (!tid) return <Tag color="purple">Platform</Tag>;
+                        const t = tenants.find((x) => x.id === tid);
+                        return <span style={{ fontSize: 12, color: "#64748b" }}>{t?.name ?? tid.slice(0, 8)}</span>;
+                      },
+                    },
+                    {
+                      title: "Status", dataIndex: "is_active",
+                      render: (v: boolean) => <Tag color={v ? "success" : "default"}>{v ? "Aktif" : "Nonaktif"}</Tag>,
+                    },
+                    {
+                      title: "Aksi", width: 100,
+                      render: (_: unknown, r: StaffListItem) => (
+                        <button
+                          onClick={() => handleToggleStaff(r.id, r.is_active)}
+                          style={{ background: r.is_active ? "#fee2e2" : "#d1fae5", color: r.is_active ? "#b91c1c" : "#065f46", border: "none", borderRadius: 7, padding: "4px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                        >
+                          {r.is_active ? "Nonaktifkan" : "Aktifkan"}
+                        </button>
+                      ),
+                    },
+                  ]}
+                />
+              </div>
+            )}
+          </div>
+        </motion.div>
       </div>
+
+      {/* ─── Modal: Tambah Akun Staf ─── */}
+      <Modal
+        title={
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <UserOutlined style={{ color: "#6366f1" }} />
+            <span style={{ fontWeight: 800 }}>Tambah Akun Staf Baru</span>
+          </div>
+        }
+        open={staffModalOpen}
+        onCancel={() => { setStaffModalOpen(false); staffForm.resetFields(); }}
+        footer={null}
+        width={480}
+        destroyOnHidden
+      >
+        <Form form={staffForm} layout="vertical" onFinish={handleCreateStaff} style={{ marginTop: 12 }}>
+          <Form.Item name="tenantId" label="Outlet / Tenant" rules={[{ required: true, message: "Pilih tenant" }]}>
+            <Select
+              placeholder="Pilih tenant..."
+              options={[
+                ...tenants.map((t) => ({ value: t.id, label: `${t.name} (${t.slug})` })),
+                { value: "", label: "Platform (hanya untuk Super Admin)" },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="role" label="Role" rules={[{ required: true, message: "Pilih role" }]}>
+            <Select placeholder="Pilih role..." options={[
+              { value: "OWNER",   label: "🏢 Admin Outlet (Owner)" },
+              { value: "CASHIER", label: "🏪 Kasir" },
+              { value: "KITCHEN", label: "👨‍🍳 Dapur" },
+              { value: "RUNNER",  label: "🏃 Runner" },
+              { value: "SUPER_ADMIN", label: "👑 Super Admin (hati-hati)" },
+            ]} />
+          </Form.Item>
+          <Form.Item name="fullName" label="Nama Lengkap">
+            <Input placeholder="Ahmad Barista" prefix={<UserOutlined />} />
+          </Form.Item>
+          <Form.Item name="email" label="Email Login" rules={[{ required: true, type: "email", message: "Email tidak valid" }]}>
+            <Input placeholder="kasir@kafe.com" />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label="Password Awal"
+            rules={[{ required: true, min: 8, message: "Minimal 8 karakter" }]}
+            extra="Staff dapat mengubah password setelah login"
+          >
+            <Input.Password placeholder="Min. 8 karakter" />
+          </Form.Item>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 8 }}>
+            <Button onClick={() => { setStaffModalOpen(false); staffForm.resetFields(); }}>Batal</Button>
+            <Button type="primary" htmlType="submit" loading={staffSaving} style={{ background: "#09090b" }}>Buat Akun</Button>
+          </div>
+        </Form>
+      </Modal>
 
       {/* ─── Wizard Modal ─── */}
       <Modal

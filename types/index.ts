@@ -1,4 +1,4 @@
-export type UserRole = "SUPER_ADMIN" | "OWNER" | "CASHIER" | "KITCHEN";
+export type UserRole = "SUPER_ADMIN" | "OWNER" | "CASHIER" | "KITCHEN" | "RUNNER";
 export type PaymentTiming = "prepaid" | "postpaid";
 export type PaymentMode = "gateway" | "manual";
 export type NamberingType = "queue" | "table";

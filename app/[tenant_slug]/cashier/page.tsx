@@ -12,6 +12,8 @@ import { toggleProductAvailability } from "@/services/productService";
 import { useRealtimeOrders } from "@/hooks/useRealtime";
 import type { Order, Tenant, Profile, Product, CartItem, PaymentMethodType, Category } from "@/types";
 import { ProductCard } from "@/components/ProductCard";
+import { TenantRoleGuard } from "@/components/auth/TenantRoleGuard";
+import { useBluetoothPrinter } from "@/hooks/useBluetoothPrinter";
 
 const STATUS_COLOR: Record<string, string> = {
   pending: "orange", cooking: "blue", ready: "green",
@@ -45,6 +47,28 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [productSearch, setProductSearch] = useState("");
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [posMobileTab, setPosMobileTab] = useState<"menu" | "cart">("menu");
+
+  // ── Fase 3: Thermal Printer Integration (Dual Mode: Browser + Web Bluetooth) ──
+  const btPrinter = useBluetoothPrinter();
+  const [printMode, setPrintMode] = useState<"browser" | "bluetooth">("browser");
+  const [printerPromptDismissed, setPrinterPromptDismissed] = useState(false);
+  const [printerSettingsOpen, setPrinterSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedMode = localStorage.getItem("pesanin_cashier_print_mode");
+      if (savedMode === "bluetooth" || savedMode === "browser") {
+        setPrintMode(savedMode);
+      }
+    }
+  }, []);
+
+  const changePrintMode = (mode: "browser" | "bluetooth") => {
+    setPrintMode(mode);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("pesanin_cashier_print_mode", mode);
+    }
+  };
   const [voidForm] = Form.useForm();
   const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
   const [undoQueueState, setUndoQueueState] = useState<Record<string, string>>({});
@@ -363,10 +387,42 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     }
   };
 
+  const triggerPrintOrder = useCallback(
+    async (targetOrder: Order, method: PaymentMethodType = "cash", cash: number | null = null) => {
+      setPrintReceiptData({ order: targetOrder, payMethod: method, cashReceived: cash });
+      if (printMode === "bluetooth") {
+        if (!btPrinter.isConnected) {
+          message.warning("Printer Bluetooth belum terhubung. Mengalihkan ke cetak browser.");
+          setTimeout(() => window.print(), 150);
+          return;
+        }
+        if (!tenant) return;
+        message.loading({ content: "Mengirim ke printer Bluetooth...", key: "bt_print" });
+        const ok = await btPrinter.printBluetoothReceipt(targetOrder, tenant, {
+          paperSize: tenant.receipt_config?.paper_size === "80mm" ? "80mm" : "58mm",
+          payMethod: method,
+          cashReceived: cash,
+        });
+        if (ok) {
+          message.success({ content: `Struk #${targetOrder.queue_number} berhasil dicetak!`, key: "bt_print" });
+        } else {
+          message.error({ content: btPrinter.error || "Gagal mencetak struk", key: "bt_print" });
+        }
+      } else {
+        setTimeout(() => window.print(), 150);
+      }
+    },
+    [printMode, btPrinter, tenant]
+  );
+
   const handlePrintReceipt = () => {
-    setTimeout(() => {
-      window.print();
-    }, 120);
+    if (printReceiptData && printReceiptData.order) {
+      triggerPrintOrder(printReceiptData.order, printReceiptData.payMethod, printReceiptData.cashReceived);
+    } else {
+      setTimeout(() => {
+        window.print();
+      }, 120);
+    }
   };
 
   const handleApprove = async (orderId: string) => {
@@ -522,12 +578,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
       if (created) {
         if (isPayNow || isPosOnly) {
-          // POS mode: skip kitchen, go directly to payment + auto-complete on pay
-          await updateOrderStatus(created.id, "cooking");
+          // Open pay modal directly. Initial order status stays 'pending' until paid, matching kiosk orders.
           setPayModal({ open: true, order: created, autoComplete: isPosOnly });
           setPayMethod("cash");
           setCashReceived(created.total_amount);
-          message.success(`Pesanan #${qn} berhasil dikirim!`);
+          message.success(`Pesanan #${qn} berhasil dibuat!`);
         } else {
           message.success(`Pesanan #${qn} berhasil disimpan di daftar Menunggu`);
         }
@@ -778,157 +833,201 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
         return (
           <div className="flex flex-wrap gap-1.5">
-            {/* TAB MENUNGGU (pending) */}
-            {r.order_status === "pending" && (
+            {/* MODE POS ONLY ACTIONS */}
+            {isPosOnly && (
               <>
-                {bl?.payment_timing === "postpaid" &&
-                  bl.require_cashier_verification &&
-                  r.verification_status === "unverified" && (
+                {isUnpaid && (
+                  <>
+                    <Button
+                      type="primary"
+                      size="small"
+                      style={{ background: "#10b981", borderColor: "#10b981", color: "#fff", fontWeight: 700 }}
+                      onClick={() => {
+                        setPayModal({ open: true, order: r, autoComplete: true });
+                        setPayMethod(r.payment_method || "cash");
+                        setCashReceived(r.total_amount);
+                      }}
+                    >
+                      💳 Proses Bayar
+                    </Button>
+                    <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
+                      Batal
+                    </Button>
+                  </>
+                )}
+
+                {(isPaid || isOrderEffectivelyCompleted(r)) && (
+                  <>
                     <Button
                       size="small"
-                      loading={submitting[`approve_${r.id}`]}
-                      style={{ background: "#22c55e", color: "#fff", border: "none" }}
-                      onClick={() =>
-                        Modal.confirm({
-                          title: "Terima pesanan ini? Pesanan akan diteruskan ke dapur",
-                          onOk: () => handleApprove(r.id),
-                        })
-                      }
+                      icon={<span>🖨️</span>}
+                      onClick={() => triggerPrintOrder(r, r.payment_method ?? "cash", null)}
                     >
-                      Terima
+                      Cetak
                     </Button>
-                  )}
-                {isUnpaid && (
-                  <Button
-                    type="primary"
-                    size="small"
-                    onClick={() => {
-                      setPayModal({ open: true, order: r, autoComplete: false });
-                      setPayMethod(r.payment_method || "cash");
-                      setCashReceived(r.total_amount);
-                    }}
-                  >
-                    Tandai Lunas
-                  </Button>
-                )}
-              </>
-            )}
-
-            {/* TAB SEDANG DIMASAK (cooking) */}
-            {r.order_status === "cooking" && (
-              <>
-                <Button
-                  size="small"
-                  style={{ background: "#3b82f6", color: "#fff", border: "none" }}
-                  onClick={() => handleMarkOrderReady(r)}
-                >
-                  ✅ Tandai Siap
-                </Button>
-                {isUnpaid && (
-                  <Button
-                    type="primary"
-                    size="small"
-                    onClick={() => {
-                      setPayModal({ open: true, order: r, autoComplete: false });
-                      setPayMethod(r.payment_method || "cash");
-                      setCashReceived(r.total_amount);
-                    }}
-                  >
-                    Tandai Lunas
-                  </Button>
-                )}
-              </>
-            )}
-
-            {/* TAB SIAP AMBIL / SAJIKAN (ready) */}
-            {r.order_status === "ready" && (
-              <>
-                {/* For Dine-in: step 1 is Sajikan (if not served yet) */}
-                {isDineIn && !isServed && (
-                  <Button
-                    size="small"
-                    loading={submitting[`serve_${r.id}`]}
-                    style={{ background: "#f59e0b", color: "#fff", border: "none" }}
-                    onClick={() =>
-                      startCountdownAction(r.id, "Sajikan", async () => {
-                        await handleServe(r);
-                      })
-                    }
-                  >
-                    🍽️ Sajikan
-                  </Button>
-                )}
-
-                {/* If Dine-in served OR Takeaway: can now be completed */}
-                {(isServed || !isDineIn) && (
-                  <>
-                    {isPaid ? (
-                      <Button
-                        size="small"
-                        loading={submitting[`complete_${r.id}`]}
-                        style={{ background: "#3b82f6", color: "#fff", border: "none" }}
-                        onClick={() =>
-                          startCountdownAction(r.id, "Selesai", async () => {
-                            await handleReadyToComplete(r.id);
-                          })
-                        }
-                      >
-                        ✅ Selesai
+                    {r.order_status !== "cancelled" && (
+                      <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
+                        Void
                       </Button>
-                    ) : (
-                      /* 1 Button gabungan untuk Tandai Lunas & Selesai */
+                    )}
+                  </>
+                )}
+              </>
+            )}
+
+            {/* NORMAL KAFE / RESTO ACTIONS */}
+            {!isPosOnly && (
+              <>
+                {/* TAB MENUNGGU (pending) */}
+                {r.order_status === "pending" && (
+                  <>
+                    {bl?.payment_timing === "postpaid" &&
+                      bl.require_cashier_verification &&
+                      r.verification_status === "unverified" && (
+                        <Button
+                          size="small"
+                          loading={submitting[`approve_${r.id}`]}
+                          style={{ background: "#22c55e", color: "#fff", border: "none" }}
+                          onClick={() =>
+                            Modal.confirm({
+                              title: "Terima pesanan ini? Pesanan akan diteruskan ke dapur",
+                              onOk: () => handleApprove(r.id),
+                            })
+                          }
+                        >
+                          Terima
+                        </Button>
+                      )}
+                    {isUnpaid && (
                       <Button
                         type="primary"
                         size="small"
-                        style={{ background: "#10b981", borderColor: "#10b981", color: "#fff" }}
                         onClick={() => {
-                          setPayModal({ open: true, order: r, autoComplete: true });
+                          setPayModal({ open: true, order: r, autoComplete: false });
                           setPayMethod(r.payment_method || "cash");
                           setCashReceived(r.total_amount);
                         }}
                       >
-                        💳 Tandai Lunas & Selesai
+                        Tandai Lunas
                       </Button>
                     )}
                   </>
                 )}
 
-                {/* Secondary Tandai Lunas if unpaid and not served yet */}
-                {isDineIn && !isServed && isUnpaid && (
+                {/* TAB SEDANG DIMASAK (cooking) */}
+                {r.order_status === "cooking" && (
+                  <>
+                    <Button
+                      size="small"
+                      style={{ background: "#3b82f6", color: "#fff", border: "none" }}
+                      onClick={() => handleMarkOrderReady(r)}
+                    >
+                      ✅ Tandai Siap
+                    </Button>
+                    {isUnpaid && (
+                      <Button
+                        type="primary"
+                        size="small"
+                        onClick={() => {
+                          setPayModal({ open: true, order: r, autoComplete: false });
+                          setPayMethod(r.payment_method || "cash");
+                          setCashReceived(r.total_amount);
+                        }}
+                      >
+                        Tandai Lunas
+                      </Button>
+                    )}
+                  </>
+                )}
+
+                {/* TAB SIAP AMBIL / SAJIKAN (ready) */}
+                {r.order_status === "ready" && (
+                  <>
+                    {/* For Dine-in: step 1 is Sajikan (if not served yet) */}
+                    {isDineIn && !isServed && (
+                      <Button
+                        size="small"
+                        loading={submitting[`serve_${r.id}`]}
+                        style={{ background: "#f59e0b", color: "#fff", border: "none" }}
+                        onClick={() =>
+                          startCountdownAction(r.id, "Sajikan", async () => {
+                            await handleServe(r);
+                          })
+                        }
+                      >
+                        🍽️ Sajikan
+                      </Button>
+                    )}
+
+                    {/* If Dine-in served OR Takeaway: can now be completed */}
+                    {(isServed || !isDineIn) && (
+                      <>
+                        {isPaid ? (
+                          <Button
+                            size="small"
+                            loading={submitting[`complete_${r.id}`]}
+                            style={{ background: "#3b82f6", color: "#fff", border: "none" }}
+                            onClick={() =>
+                              startCountdownAction(r.id, "Selesai", async () => {
+                                await handleReadyToComplete(r.id);
+                              })
+                            }
+                          >
+                            ✅ Selesai
+                          </Button>
+                        ) : (
+                          /* 1 Button gabungan untuk Tandai Lunas & Selesai */
+                          <Button
+                            type="primary"
+                            size="small"
+                            style={{ background: "#10b981", borderColor: "#10b981", color: "#fff" }}
+                            onClick={() => {
+                              setPayModal({ open: true, order: r, autoComplete: true });
+                              setPayMethod(r.payment_method || "cash");
+                              setCashReceived(r.total_amount);
+                            }}
+                          >
+                            💳 Tandai Lunas & Selesai
+                          </Button>
+                        )}
+                      </>
+                    )}
+
+                    {/* Secondary Tandai Lunas if unpaid and not served yet */}
+                    {isDineIn && !isServed && isUnpaid && (
+                      <Button
+                        type="default"
+                        size="small"
+                        onClick={() => {
+                          setPayModal({ open: true, order: r, autoComplete: false });
+                          setPayMethod(r.payment_method || "cash");
+                          setCashReceived(r.total_amount);
+                        }}
+                      >
+                        Tandai Lunas
+                      </Button>
+                    )}
+                  </>
+                )}
+
+                {/* VOID BUTTON */}
+                {r.order_status !== "cancelled" && !isOrderEffectivelyCompleted(r) && (
+                  <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
+                    Void
+                  </Button>
+                )}
+
+                {/* REPRINT RECEIPT BUTTON */}
+                {(r.payment_status === "paid" || isOrderEffectivelyCompleted(r)) && (
                   <Button
-                    type="default"
                     size="small"
-                    onClick={() => {
-                      setPayModal({ open: true, order: r, autoComplete: false });
-                      setPayMethod(r.payment_method || "cash");
-                      setCashReceived(r.total_amount);
-                    }}
+                    icon={<span>🖨️</span>}
+                    onClick={() => triggerPrintOrder(r, r.payment_method ?? "cash", null)}
                   >
-                    Tandai Lunas
+                    Cetak
                   </Button>
                 )}
               </>
-            )}
-
-            {/* VOID BUTTON */}
-            {r.order_status !== "cancelled" && !isOrderEffectivelyCompleted(r) && (
-              <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
-                Void
-              </Button>
-            )}
-
-            {/* REPRINT RECEIPT BUTTON */}
-            {(r.payment_status === "paid" || isOrderEffectivelyCompleted(r)) && (
-              <Button
-                size="small"
-                icon={<span>🖨️</span>}
-                onClick={() => {
-                  setPrintReceiptData({ order: r, payMethod: r.payment_method ?? "cash", cashReceived: null });
-                  setTimeout(() => window.print(), 150);
-                }}
-              >
-                Cetak
-              </Button>
             )}
           </div>
         );
@@ -972,14 +1071,78 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
   if (!tenant) return <div className="p-8 text-gray-400">Loading...</div>;
 
+  const unpaidPosOrders = orders.filter(
+    (o) =>
+      o.payment_status === "unpaid" &&
+      o.order_status !== "cancelled" &&
+      !isOrderEffectivelyCompleted(o)
+  );
+
   return (
-    <div
-      style={{ minHeight: "100vh", background: "#f1f5f9" }}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
+    <TenantRoleGuard
+      tenantSlug={tenant?.slug || ""}
+      tenantId={tenant?.id || null}
+      isPosOnly={isPosOnly}
+      allowedRoles={["CASHIER", "OWNER", "SUPER_ADMIN"]}
     >
-      {/* Pull-to-refresh indicator */}
+      <div
+        style={{ minHeight: "100vh", background: "#f1f5f9" }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
+        {/* ─── PRINTER STATUS / LOGIN PROMPT ALERT BANNER ─── */}
+        {!printerPromptDismissed && (
+          <div className="bg-slate-900 text-white px-4 py-2.5 flex items-center justify-between gap-3 text-xs border-b border-slate-800 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🖨️</span>
+              <div>
+                <span className="font-semibold">Printer Kasir: </span>
+                <span className="text-slate-300">
+                  Mode: <strong className="text-white uppercase">{printMode}</strong>
+                  {printMode === "bluetooth" ? (
+                    btPrinter.isConnected ? (
+                      <span className="text-emerald-400 font-bold ml-1.5">● Terhubung ({btPrinter.deviceName})</span>
+                    ) : (
+                      <span className="text-amber-400 font-bold ml-1.5">○ Belum Terhubung</span>
+                    )
+                  ) : (
+                    <span className="text-slate-400 ml-1.5">(Dialog Sistem Browser)</span>
+                  )}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {printMode === "bluetooth" && !btPrinter.isConnected && btPrinter.isSupported && (
+                <button
+                  type="button"
+                  onClick={() => btPrinter.connect()}
+                  disabled={btPrinter.isConnecting}
+                  className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold px-3 py-1 rounded-lg transition-all"
+                >
+                  {btPrinter.isConnecting ? "Menghubungkan..." : "Hubungkan Printer"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setPrinterSettingsOpen(true)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1 rounded-lg font-medium transition-all"
+              >
+                ⚙️ Pengaturan
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrinterPromptDismissed(true)}
+                className="text-slate-400 hover:text-white p-1"
+                title="Tutup banner"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Pull-to-refresh indicator */}
       {pullY > 0 && (
         <div
           className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center transition-all"
@@ -1005,7 +1168,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           </h1>
           <div className="flex items-center gap-2 mt-0.5 flex-wrap">
             <p className="text-white/70 text-xs">
-              {isPosOnly ? "Kasir POS Murni" : "Layar Kasir"} · <span className="font-semibold">{new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" })}</span>
+              {isPosOnly ? "Kasir POS" : "Layar Kasir"} · <span className="font-semibold">{new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" })}</span>
             </p>
             {lastSynced && (
               <span className="text-white/50 text-[10px] font-medium">
@@ -1034,6 +1197,30 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
               </>
             )}
           </button>
+          {/* Printer Settings / Status Button */}
+          <button
+            type="button"
+            onClick={() => setPrinterSettingsOpen(true)}
+            className="flex items-center gap-1.5 text-white/80 hover:text-white text-xs font-bold border border-white/30 px-3 py-2 rounded-xl hover:bg-white/10 transition-all"
+            title="Pengaturan Printer Thermal"
+          >
+            <span>🖨️</span>
+            <span className="hidden sm:inline">
+              {printMode === "bluetooth"
+                ? btPrinter.isConnected
+                  ? btPrinter.deviceName || "BT Printer"
+                  : "BT Terputus"
+                : "Print"}
+            </span>
+            {printMode === "bluetooth" && (
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  btPrinter.isConnected ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
+                }`}
+              />
+            )}
+          </button>
+
           <a
             href="analytics"
             className="flex items-center gap-1.5 text-white/80 hover:text-white text-sm font-medium border border-white/30 px-3 py-2 rounded-xl hover:bg-white/10 transition-all"
@@ -1053,114 +1240,256 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       {/* ─── Tab content ─── */}
       <div className="p-4 md:p-6">
         <Tabs
-          defaultActiveKey="pending"
+          defaultActiveKey={isPosOnly ? "unpaid_queue" : "pending"}
           type="card"
-          items={[
-            ...(showPendingTab ? [{
-              key: "pending",
-              label: (
-                <span className="inline-flex items-center gap-1.5">
-                  Menunggu
-                  {pendingBadge > 0 && (
-                    <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-red-500 text-white leading-none">{pendingBadge}</span>
-                  )}
-                </span>
-              ),
-              children: (
-                <Table dataSource={filterOrders(["pending"])} columns={columns} rowKey="id" size="middle" scroll={{ x: 800 }} />
-              ),
-            }] : []),
-            {
-              key: "cooking",
-              label: (
-                <span className="inline-flex items-center gap-1.5">
-                  Sedang Dimasak
-                  {filterOrders(["cooking"]).length > 0 && (
-                    <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-blue-500 text-white leading-none">{filterOrders(["cooking"]).length}</span>
-                  )}
-                </span>
-              ),
-              children: (
-                <Table dataSource={filterOrders(["cooking"])} columns={columns} rowKey="id" size="middle" scroll={{ x: 800 }} />
-              ),
-            },
-            {
-              key: "ready",
-              label: (
-                <span className="inline-flex items-center gap-1.5">
-                  Siap Ambil
-                  {filterOrders(["ready"]).length > 0 && (
-                    <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-green-500 text-white leading-none">{filterOrders(["ready"]).length}</span>
-                  )}
-                </span>
-              ),
-              children: (
-                <Table dataSource={filterOrders(["ready"])} columns={columns} rowKey="id" size="middle" scroll={{ x: 800 }} />
-              ),
-            },
-            {
-              key: "done",
-              label: (
-                <span className="inline-flex items-center gap-1.5">
-                  Selesai &amp; Void
-                  {filterOrders(["completed", "cancelled"]).length > 0 && (
-                    <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-blue-400 text-white leading-none">
-                      {filterOrders(["completed", "cancelled"]).length > 999 ? "999+" : filterOrders(["completed", "cancelled"]).length}
+          items={
+            isPosOnly
+              ? [
+                {
+                  key: "unpaid_queue",
+                  label: (
+                    <span className="inline-flex items-center gap-1.5">
+                      💳 Antrian Bayar
+                      {unpaidPosOrders.length > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-amber-500 text-white leading-none">
+                          {unpaidPosOrders.length}
+                        </span>
+                      )}
                     </span>
-                  )}
-                </span>
-              ),
-              children: (
-                <Table dataSource={filterOrders(["completed", "cancelled"])} columns={columns} rowKey="id" size="middle" scroll={{ x: 800 }} />
-              ),
-            },
-            {
-              key: "stock",
-              label: "Produk & Stok",
-              children: (
-                <Table
-                  dataSource={products}
-                  rowKey="id"
-                  size="middle"
-                  columns={[
-                    { title: "Produk", dataIndex: "name", key: "name" },
+                  ),
+                  children: (
+                    <Table
+                      dataSource={unpaidPosOrders}
+                      columns={columns}
+                      rowKey="id"
+                      size="middle"
+                      scroll={{ x: 800 }}
+                      locale={{
+                        emptyText: (
+                          <div className="py-12 text-center text-gray-400">
+                            <span className="text-4xl block mb-2">🎉</span>
+                            <p className="font-semibold text-gray-600">Tidak ada antrian pembayaran</p>
+                            <p className="text-xs text-gray-400">Pesanan dari Kiosk / Self-Order akan masuk ke sini untuk diproses kasir.</p>
+                          </div>
+                        ),
+                      }}
+                    />
+                  ),
+                },
+                {
+                  key: "done",
+                  label: (
+                    <span className="inline-flex items-center gap-1.5">
+                      Selesai & Void
+                      {filterOrders(["completed", "cancelled"]).length > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-blue-500 text-white leading-none">
+                          {filterOrders(["completed", "cancelled"]).length > 999
+                            ? "999+"
+                            : filterOrders(["completed", "cancelled"]).length}
+                        </span>
+                      )}
+                    </span>
+                  ),
+                  children: (
+                    <Table
+                      dataSource={filterOrders(["completed", "cancelled"])}
+                      columns={columns}
+                      rowKey="id"
+                      size="middle"
+                      scroll={{ x: 800 }}
+                    />
+                  ),
+                },
+                {
+                  key: "stock",
+                  label: "Produk & Stok",
+                  children: (
+                    <Table
+                      dataSource={products}
+                      rowKey="id"
+                      size="middle"
+                      columns={[
+                        { title: "Produk", dataIndex: "name", key: "name" },
+                        {
+                          title: "Stok",
+                          render: (_: unknown, r: Product) => (
+                            <InputNumber
+                              value={r.stock_count ?? undefined}
+                              placeholder="∞"
+                              min={0}
+                              onChange={async (val) => {
+                                await toggleProductAvailability(r.id, (val ?? 0) > 0, val ?? null);
+                                if (tenant) {
+                                  const fresh = await getAllProductsByTenant(tenant.id);
+                                  setProducts(fresh);
+                                }
+                              }}
+                            />
+                          ),
+                        },
+                        {
+                          title: "Tersedia",
+                          render: (_: unknown, r: Product) => (
+                            <Switch
+                              checked={r.is_available}
+                              onChange={async (v) => {
+                                await toggleProductAvailability(r.id, v);
+                                if (tenant) {
+                                  const fresh = await getAllProductsByTenant(tenant.id);
+                                  setProducts(fresh);
+                                }
+                              }}
+                            />
+                          ),
+                        },
+                      ]}
+                    />
+                  ),
+                },
+              ]
+              : [
+                ...(showPendingTab
+                  ? [
                     {
-                      title: "Stok",
-                      render: (_: unknown, r: Product) => (
-                        <InputNumber
-                          value={r.stock_count ?? undefined}
-                          placeholder="∞"
-                          min={0}
-                          onChange={async (val) => {
-                            await toggleProductAvailability(r.id, (val ?? 0) > 0, val ?? null);
-                            if (tenant) {
-                              const fresh = await getAllProductsByTenant(tenant.id);
-                              setProducts(fresh);
-                            }
-                          }}
+                      key: "pending",
+                      label: (
+                        <span className="inline-flex items-center gap-1.5">
+                          Menunggu
+                          {pendingBadge > 0 && (
+                            <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-red-500 text-white leading-none">
+                              {pendingBadge}
+                            </span>
+                          )}
+                        </span>
+                      ),
+                      children: (
+                        <Table
+                          dataSource={filterOrders(["pending"])}
+                          columns={columns}
+                          rowKey="id"
+                          size="middle"
+                          scroll={{ x: 800 }}
                         />
                       ),
                     },
-                    {
-                      title: "Tersedia",
-                      render: (_: unknown, r: Product) => (
-                        <Switch
-                          checked={r.is_available}
-                          onChange={async (v) => {
-                            await toggleProductAvailability(r.id, v);
-                            if (tenant) {
-                              const fresh = await getAllProductsByTenant(tenant.id);
-                              setProducts(fresh);
-                            }
-                          }}
-                        />
-                      ),
-                    },
-                  ]}
-                />
-              ),
-            },
-          ]}
+                  ]
+                  : []),
+                {
+                  key: "cooking",
+                  label: (
+                    <span className="inline-flex items-center gap-1.5">
+                      Sedang Dimasak
+                      {filterOrders(["cooking"]).length > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-blue-500 text-white leading-none">
+                          {filterOrders(["cooking"]).length}
+                        </span>
+                      )}
+                    </span>
+                  ),
+                  children: (
+                    <Table
+                      dataSource={filterOrders(["cooking"])}
+                      columns={columns}
+                      rowKey="id"
+                      size="middle"
+                      scroll={{ x: 800 }}
+                    />
+                  ),
+                },
+                {
+                  key: "ready",
+                  label: (
+                    <span className="inline-flex items-center gap-1.5">
+                      Siap Ambil
+                      {filterOrders(["ready"]).length > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-green-500 text-white leading-none">
+                          {filterOrders(["ready"]).length}
+                        </span>
+                      )}
+                    </span>
+                  ),
+                  children: (
+                    <Table
+                      dataSource={filterOrders(["ready"])}
+                      columns={columns}
+                      rowKey="id"
+                      size="middle"
+                      scroll={{ x: 800 }}
+                    />
+                  ),
+                },
+                {
+                  key: "done",
+                  label: (
+                    <span className="inline-flex items-center gap-1.5">
+                      Selesai &amp; Void
+                      {filterOrders(["completed", "cancelled"]).length > 0 && (
+                        <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold rounded-full bg-blue-400 text-white leading-none">
+                          {filterOrders(["completed", "cancelled"]).length > 999
+                            ? "999+"
+                            : filterOrders(["completed", "cancelled"]).length}
+                        </span>
+                      )}
+                    </span>
+                  ),
+                  children: (
+                    <Table
+                      dataSource={filterOrders(["completed", "cancelled"])}
+                      columns={columns}
+                      rowKey="id"
+                      size="middle"
+                      scroll={{ x: 800 }}
+                    />
+                  ),
+                },
+                {
+                  key: "stock",
+                  label: "Produk & Stok",
+                  children: (
+                    <Table
+                      dataSource={products}
+                      rowKey="id"
+                      size="middle"
+                      columns={[
+                        { title: "Produk", dataIndex: "name", key: "name" },
+                        {
+                          title: "Stok",
+                          render: (_: unknown, r: Product) => (
+                            <InputNumber
+                              value={r.stock_count ?? undefined}
+                              placeholder="∞"
+                              min={0}
+                              onChange={async (val) => {
+                                await toggleProductAvailability(r.id, (val ?? 0) > 0, val ?? null);
+                                if (tenant) {
+                                  const fresh = await getAllProductsByTenant(tenant.id);
+                                  setProducts(fresh);
+                                }
+                              }}
+                            />
+                          ),
+                        },
+                        {
+                          title: "Tersedia",
+                          render: (_: unknown, r: Product) => (
+                            <Switch
+                              checked={r.is_available}
+                              onChange={async (v) => {
+                                await toggleProductAvailability(r.id, v);
+                                if (tenant) {
+                                  const fresh = await getAllProductsByTenant(tenant.id);
+                                  setProducts(fresh);
+                                }
+                              }}
+                            />
+                          ),
+                        },
+                      ]}
+                    />
+                  ),
+                },
+              ]
+          }
         />
       </div>
 
@@ -1548,8 +1877,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 <span>Metode Bayar</span>
                 <span style={{ fontWeight: 700, textTransform: "uppercase" }}>
                   {printReceiptData.payMethod === "cash" ? "TUNAI" :
-                   printReceiptData.payMethod === "qris_static" ? "QRIS" :
-                   printReceiptData.payMethod === "bank_transfer" ? "TRANSFER" : printReceiptData.payMethod}
+                    printReceiptData.payMethod === "qris_static" ? "QRIS" :
+                      printReceiptData.payMethod === "bank_transfer" ? "TRANSFER" : printReceiptData.payMethod}
                 </span>
               </div>
               {printReceiptData.payMethod === "cash" && printReceiptData.cashReceived !== null && (
@@ -1795,6 +2124,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                       quantity={inCartCount}
                       primaryColor="var(--tenant-primary)"
                       secondaryColor="var(--tenant-secondary)"
+                      showStockBadge={true}
                       onAddToCart={addToCart}
                       onUpdateQuantity={updateProductQuantityInCart}
                     />
@@ -2046,7 +2376,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     )}
                     <div className="flex justify-between font-extrabold text-base pt-1 text-gray-900">
                       <span>Total Tagihan</span>
-                        <span style={{ color: "var(--tenant-secondary, var(--tenant-primary))" }}>
+                      <span style={{ color: "var(--tenant-secondary, var(--tenant-primary))" }}>
                         Rp {cartTotal.toLocaleString("id-ID")}
                       </span>
                     </div>
@@ -2076,15 +2406,15 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   </button>
 
                   {!isPosOnly && (
-                  <button
-                    type="button"
-                    onClick={() => handleCreateCashierOrder("save_pending")}
-                    disabled={cart.length === 0 || submitting["createOrder"]}
-                    className="w-full py-2.5 px-4 rounded-xl font-bold text-xs border border-gray-200 text-gray-700 bg-gray-50 hover:bg-gray-100 transition-all active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <span>⏳</span>
-                    <span>Simpan ke Waiting List (Menunggu)</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCreateCashierOrder("save_pending")}
+                      disabled={cart.length === 0 || submitting["createOrder"]}
+                      className="w-full py-2.5 px-4 rounded-xl font-bold text-xs border border-gray-200 text-gray-700 bg-gray-50 hover:bg-gray-100 transition-all active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <span>⏳</span>
+                      <span>Simpan ke Waiting List (Menunggu)</span>
+                    </button>
                   )}
                 </div>
               </div>
@@ -2093,7 +2423,191 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           </div>
         </div>
       </Drawer>
+
+      {/* ─── MODAL PENGATURAN PRINTER THERMAL ─── */}
+      <Modal
+        title={
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🖨️</span>
+            <span className="font-bold text-base">Pengaturan Printer Struk</span>
+          </div>
+        }
+        open={printerSettingsOpen}
+        onCancel={() => setPrinterSettingsOpen(false)}
+        footer={null}
+        width={500}
+        destroyOnHidden
+      >
+        <div className="space-y-5 pt-2">
+          <div>
+            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
+              Pilih Mode Pencetakan
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div
+                onClick={() => changePrintMode("browser")}
+                className={`p-3.5 rounded-xl border-2 cursor-pointer transition-all ${
+                  printMode === "browser"
+                    ? "border-indigo-600 bg-indigo-50/60"
+                    : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <div className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
+                  <span>🌐</span> Browser Print
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1 leading-snug">
+                  Dialog cetak standar browser. Bekerja di PC/Laptop dengan driver USB/LAN.
+                </p>
+              </div>
+
+              <div
+                onClick={() => changePrintMode("bluetooth")}
+                className={`p-3.5 rounded-xl border-2 cursor-pointer transition-all ${
+                  printMode === "bluetooth"
+                    ? "border-indigo-600 bg-indigo-50/60"
+                    : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <div className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
+                  <span>📱</span> Bluetooth Direct
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1 leading-snug">
+                  Cetak langsung tanpa pop-up dialog. Cocok untuk thermal portable di Tablet/HP.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {printMode === "bluetooth" && (
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-gray-700 block">Status Perangkat Bluetooth</span>
+                  <span className="text-xs text-gray-500">
+                    {btPrinter.isConnected ? (
+                      <span className="text-emerald-600 font-bold">🟢 Terhubung: {btPrinter.deviceName}</span>
+                    ) : (
+                      <span className="text-gray-400">⚪ Belum terhubung</span>
+                    )}
+                  </span>
+                </div>
+
+                {btPrinter.isConnected ? (
+                  <Button danger size="small" onClick={() => btPrinter.disconnect()}>
+                    Putuskan
+                  </Button>
+                ) : (
+                  <Button
+                    type="primary"
+                    size="small"
+                    loading={btPrinter.isConnecting}
+                    onClick={() => btPrinter.connect()}
+                    style={{ background: "#4f46e5" }}
+                  >
+                    Hubungkan Printer
+                  </Button>
+                )}
+              </div>
+
+              {!btPrinter.isSupported && (
+                <div className="p-2.5 bg-amber-50 text-amber-800 text-[11px] rounded-lg border border-amber-200">
+                  ⚠️ Browser ini tidak mendukung Web Bluetooth API. Disarankan gunakan Google Chrome atau Microsoft Edge.
+                </div>
+              )}
+
+              {btPrinter.error && (
+                <div className="p-2.5 bg-red-50 text-red-700 text-[11px] rounded-lg border border-red-200">
+                  {btPrinter.error}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="text-xs text-gray-500 bg-slate-50 p-3 rounded-lg flex items-center justify-between">
+            <span>Ukuran Kertas Outlet:</span>
+            <span className="font-bold text-gray-800">{tenant?.receipt_config?.paper_size || "58mm"}</span>
+          </div>
+
+          <div className="pt-2 flex justify-between gap-2 border-t">
+            <Button
+              onClick={async () => {
+                if (!tenant) return;
+                const sampleOrder: Order = {
+                  id: "sample-preview",
+                  tenant_id: tenant.id,
+                  queue_number: "001",
+                  table_number: "01",
+                  table_id: null,
+                  order_type: "dine_in",
+                  order_status: "completed",
+                  payment_status: "paid",
+                  verification_status: "verified",
+                  subtotal: 35000,
+                  tax_amount: 3850,
+                  service_charge_amount: 1750,
+                  takeaway_fee_amount: 0,
+                  total_amount: 40600,
+                  payment_method: "cash",
+                  selected_manual_channel_id: null,
+                  gateway_transaction_id: null,
+                  customer_name: "Tamu Test",
+                  customer_notes: "Sample Test Print",
+                  verified_by: null,
+                  verified_at: null,
+                  void_reason: null,
+                  voided_by: null,
+                  voided_at: null,
+                  created_by_cashier: true,
+                  cashier_profile_id: null,
+                  finance_snapshot: {
+                    tax_percentage: 11,
+                    service_charge_percentage: 5,
+                    takeaway_fee: 0,
+                  },
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                  items: [
+                    {
+                      id: "item-1",
+                      order_id: "sample-preview",
+                      product_id: null,
+                      product_name_snapshot: "Test Kopi Susu",
+                      base_price_snapshot: 20000,
+                      selected_variants: [],
+                      quantity: 1,
+                      unit_price: 20000,
+                      subtotal: 20000,
+                      notes: null,
+                      created_at: new Date().toISOString(),
+                    },
+                    {
+                      id: "item-2",
+                      order_id: "sample-preview",
+                      product_id: null,
+                      product_name_snapshot: "Test Croissant",
+                      base_price_snapshot: 15000,
+                      selected_variants: [],
+                      quantity: 1,
+                      unit_price: 15000,
+                      subtotal: 15000,
+                      notes: null,
+                      created_at: new Date().toISOString(),
+                    },
+                  ],
+                };
+                await triggerPrintOrder(sampleOrder, "cash", 50000);
+              }}
+            >
+              🖨️ Test Cetak Struk
+            </Button>
+            <Button type="primary" onClick={() => setPrinterSettingsOpen(false)} style={{ background: "#09090b" }}>
+              Selesai
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
+  </TenantRoleGuard>
   );
 }
 

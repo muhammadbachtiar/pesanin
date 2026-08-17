@@ -10,6 +10,8 @@ export interface ProductCardProps {
   quantity: number;
   primaryColor?: string;
   secondaryColor?: string;
+  /** Jika true, tampilkan badge "Sisa N" di card (khusus Kasir). Kiosk tidak perlu tahu angka stok. */
+  showStockBadge?: boolean;
   onAddToCart: (product: Product) => void;
   onUpdateQuantity?: (product: Product, newQty: number) => void;
   onOpenDetail?: (product: Product) => void;
@@ -42,12 +44,25 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   quantity,
   primaryColor = "#6366f1",
   secondaryColor = "var(--tenant-secondary, #ec4899)",
+  showStockBadge = false,
   onAddToCart,
   onUpdateQuantity,
   onOpenDetail,
 }) => {
   const isCashier = role === "cashier";
   const isKiosk   = role === "kiosk";
+
+  // Produk dianggap habis jika is_available = false ATAU stock_count sudah 0
+  const isOutOfStock =
+    !product.is_available ||
+    (product.stock_count !== null && product.stock_count <= 0);
+
+  // Badge "Sisa N" hanya muncul di Kasir, ketika stok <= 5 dan belum habis
+  const showLowStock =
+    showStockBadge &&
+    product.stock_count !== null &&
+    product.stock_count > 0 &&
+    product.stock_count <= 5;
 
   const handleDecrease = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -69,15 +84,19 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
   return (
     <motion.div
-      whileTap={{ scale: 0.97 }}
+      whileTap={isOutOfStock ? undefined : { scale: 0.97 }}
       // ── Root card: NO onClick — each zone handles its own click ──
       className="relative text-left rounded-2xl border bg-white transition-all flex flex-col select-none group overflow-hidden"
       style={{
-        borderColor: quantity > 0 ? primaryColor : "#e2e8f0",
-        boxShadow: quantity > 0
+        borderColor: isOutOfStock ? "#e2e8f0" : quantity > 0 ? primaryColor : "#e2e8f0",
+        boxShadow: isOutOfStock
+          ? "0 1px 4px rgba(0,0,0,0.05)"
+          : quantity > 0
           ? `0 0 0 2.5px ${primaryColor}40, 0 2px 10px rgba(0,0,0,0.08)`
           : "0 1px 4px rgba(0,0,0,0.07)",
         minHeight: isCashier ? 188 : 220,
+        opacity: isOutOfStock ? 0.55 : 1,
+        pointerEvents: isOutOfStock ? "none" : "auto",
       }}
     >
       {/* ═══════════ IMAGE ZONE ═══════════
@@ -105,12 +124,28 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         )}
 
         {/* Qty badge – top right over image */}
-        {quantity > 0 && (
+        {quantity > 0 && !isOutOfStock && (
           <span
             className="absolute top-2 right-2 min-w-[26px] h-[26px] px-1.5 rounded-full text-white text-[11px] font-extrabold flex items-center justify-center shadow-lg border-2 border-white z-10"
             style={{ background: secondaryColor }}
           >
             {quantity}×
+          </span>
+        )}
+
+        {/* Badge HABIS — tampil di semua role ketika out of stock */}
+        {isOutOfStock && (
+          <div className="absolute inset-0 flex items-center justify-center z-20 bg-gray-900/30">
+            <span className="bg-gray-800/80 text-white text-[10px] font-black px-3 py-1.5 rounded-full tracking-wider uppercase border border-gray-600/40">
+              🚫 Habis
+            </span>
+          </div>
+        )}
+
+        {/* Badge "Sisa N" — hanya di Kasir (showStockBadge), muncul di pojok kiri atas */}
+        {showLowStock && (
+          <span className="absolute top-2 left-2 bg-amber-500 text-white text-[9px] font-extrabold px-2 py-0.5 rounded-full z-10 shadow">
+            Sisa {product.stock_count}
           </span>
         )}
 
