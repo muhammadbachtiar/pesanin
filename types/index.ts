@@ -129,6 +129,7 @@ export interface Product {
     name: string;
     description: string | null;
     base_price: number;
+    discount_price?: number | null; // Harga promo/diskon (jika ada)
     image_urls: string[];
     is_available: boolean;
     stock_count: number | null;
@@ -144,6 +145,7 @@ export interface OrderItem {
     product_id: string | null;
     product_name_snapshot: string;
     base_price_snapshot: number;
+    discount_price_snapshot?: number | null;
     selected_variants: SelectedVariant[];
     quantity: number;
     unit_price: number;

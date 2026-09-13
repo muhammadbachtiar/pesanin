@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:patch": "tsx scripts/patch-db.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
@@ -26,6 +27,7 @@
     "dotenv": "^17.3.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "postgres": "^3.4.9",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"

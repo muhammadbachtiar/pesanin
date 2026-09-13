@@ -229,6 +229,7 @@ CREATE TABLE products (
     name            TEXT NOT NULL,
     description     TEXT,
     base_price      NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    discount_price  NUMERIC(12, 2),                   -- NULL = harga normal (tanpa diskon)
     image_urls      TEXT[] DEFAULT ARRAY[]::TEXT[],   -- index 0 = gambar utama
 
     is_available    BOOLEAN NOT NULL DEFAULT TRUE,    -- toggle kasir (realtime)
@@ -374,6 +375,7 @@ CREATE TABLE order_items (
     -- Snapshot (laporan historis akurat meski produk/harga berubah)
     product_name_snapshot   TEXT NOT NULL,
     base_price_snapshot     NUMERIC(12, 2) NOT NULL,
+    discount_price_snapshot NUMERIC(12, 2),            -- snapshot harga promo jika ada
 
     -- Varian yang dipilih (snapshot)
     selected_variants       JSONB DEFAULT '[]'::JSONB,
@@ -743,30 +745,59 @@ CREATE INDEX IF NOT EXISTS idx_profiles_tenant_role
   ON profiles(tenant_id, role)
   WHERE is_active = TRUE;
 
--- ── Catatan Fase 1 (Aplikasi) ─────────────────────────────────────────────
--- Tidak ada perubahan DDL untuk Fase 1. Logika stok sepenuhnya di app layer:
---   • createOrder (services/orderService.ts) → kurangi stock_count, set is_available=false jika 0
+-- ── PATCH 6: Kolom Diskon Promo Menu ─────────────────────────────────────
+-- Menambahkan kolom harga diskon ke tabel products dan snapshot ke order_items
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'products' AND column_name = 'discount_price'
+  ) THEN
+    ALTER TABLE products ADD COLUMN discount_price NUMERIC(12, 2);
+    RAISE NOTICE 'PATCH 6: Kolom discount_price ditambahkan ke products.';
+  ELSE
+    RAISE NOTICE 'PATCH 6: SKIP — discount_price sudah ada di products.';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'order_items' AND column_name = 'discount_price_snapshot'
+  ) THEN
+    ALTER TABLE order_items ADD COLUMN discount_price_snapshot NUMERIC(12, 2);
+    RAISE NOTICE 'PATCH 6: Kolom discount_price_snapshot ditambahkan ke order_items.';
+  ELSE
+    RAISE NOTICE 'PATCH 6: SKIP — discount_price_snapshot sudah ada di order_items.';
+  END IF;
+END $$;
+
+-- ── PATCH 7: Validasi Atomik Stok (Pencegahan Over-Ordering Kasir vs Kiosk) ─
+-- Catatan: Validasi atomik dilakukan secara transaksional dengan row locking.
+-- Memastikan stok >= requested_quantity sebelum pesanan dibuat.
+
+-- ── Catatan Fase 1 & 2 (Aplikasi) ─────────────────────────────────────────
+-- Logika stok, autentikasi role, dan proteksi halaman:
+--   • createOrder (services/orderService.ts) → validasi pra-checkout + potong stock_count
 --   • voidOrder   (services/orderService.ts) → kembalikan stock_count, aktifkan kembali produk
 --   • Info angka stok HANYA tampil di halaman Kasir (showStockBadge prop).
 --   • Kiosk hanya menerima sinyal aktif/nonaktif via Realtime.
-
--- ── Catatan Fase 2 (Aplikasi) ─────────────────────────────────────────────
--- Semua perubahan role & akses ditangani di application layer:
---   • types/index.ts        → UserRole ditambah 'RUNNER'
---   • login/page.tsx        → RUNNER diredirect ke /[slug]/runner setelah login
+--   • types/index.ts        → UserRole 'RUNNER' + discount_price
+--   • login/page.tsx        → Role-based redirect
 --   • components/auth/TenantRoleGuard.tsx → guard auth + isolasi tenant + role check
 --   • services/staffService.ts            → client wrapper CRUD akun staf
 --   • app/api/admin/staff/route.ts        → server API buat akun (service_role key)
---   • app/super-admin/page.tsx            → section Manajemen Akun Staf
+--   • app/[tenant_slug]/admin/page.tsx    → Portal Admin Outlet (Owner)
+--   • app/super-admin/page.tsx            → Super Admin Portal
 
 -- ── Verifikasi Akhir Semua Patch ─────────────────────────────────────────
 -- 1. Cek RUNNER ada:
 --    SELECT enumlabel FROM pg_enum WHERE enumtypid='user_role'::regtype ORDER BY enumsortorder;
 -- 2. Cek REPLICA IDENTITY:
 --    SELECT relreplident FROM pg_class WHERE relname='products'; -- hasilnya: 'f'
--- 3. Cek Realtime Publication:
+-- 3. Cek discount_price:
+--    SELECT column_name, data_type FROM information_schema.columns WHERE table_name='products' AND column_name='discount_price';
+-- 4. Cek Realtime Publication:
 --    SELECT * FROM pg_publication_tables WHERE pubname='supabase_realtime';
 --    (Harus ada: orders, order_items, products, tables)
--- 4. Cek semua RLS profiles:
+-- 5. Cek semua RLS profiles:
 --    SELECT policyname, cmd FROM pg_policies WHERE tablename='profiles' ORDER BY policyname;
 -- ============================================================

@@ -45,6 +45,18 @@ export async function toggleProductAvailability(
     return !error;
 }
 
+export async function updateProduct(
+    productId: string,
+    updates: Partial<Omit<Product, "id" | "tenant_id">>
+): Promise<{ success: boolean; error?: string }> {
+    const { error } = await supabase.from("products").update(updates).eq("id", productId);
+    if (error) {
+        console.error("updateProduct error:", error);
+        return { success: false, error: error.message };
+    }
+    return { success: true };
+}
+
 export async function getAllProductsByTenant(tenantId: string): Promise<Product[]> {
     const { data, error } = await supabase
         .from("products")

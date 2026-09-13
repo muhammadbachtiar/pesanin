@@ -58,6 +58,14 @@ export async function toggleStaffActive(profileId: string, isActive: boolean): P
   return res.ok;
 }
 
+/** Hapus akun staf permanen (profiles + auth.users) */
+export async function deleteStaffAccount(profileId: string): Promise<boolean> {
+  const res = await fetch(`/api/admin/staff?profileId=${encodeURIComponent(profileId)}`, {
+    method: "DELETE",
+  });
+  return res.ok;
+}
+
 /** Label display per role */
 export const ROLE_LABEL: Record<UserRole, string> = {
   SUPER_ADMIN: "Super Admin",

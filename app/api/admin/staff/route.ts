@@ -208,7 +208,7 @@ export async function GET(req: NextRequest) {
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    let query = adminSb.from("profiles").select("*").eq("is_active", true);
+    let query = adminSb.from("profiles").select("*");
     if (tenantId) query = query.eq("tenant_id", tenantId);
     if (requesterRole === "OWNER") {
       // OWNER hanya lihat staf-nya, bukan akun OWNER/SA
@@ -249,6 +249,47 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[API /admin/staff PATCH]", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+}
+
+/** DELETE — Hapus akun staf permanen (profiles + auth.users) */
+export async function DELETE(req: NextRequest) {
+  try {
+    const profileId = req.nextUrl.searchParams.get("profileId");
+    if (!profileId) return NextResponse.json({ error: "profileId wajib disertakan" }, { status: 400 });
+
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceKey) return NextResponse.json({ error: "Server config error" }, { status: 500 });
+
+    const adminSb = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      serviceKey,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+
+    // Ambil user_id auth dari profile
+    const { data: prof, error: getErr } = await adminSb
+      .from("profiles")
+      .select("id, user_id, role")
+      .eq("id", profileId)
+      .single();
+
+    if (getErr || !prof) {
+      return NextResponse.json({ error: "Akun profil tidak ditemukan" }, { status: 404 });
+    }
+
+    // Hapus dari profiles
+    await adminSb.from("profiles").delete().eq("id", profileId);
+
+    // Hapus dari auth.users
+    if (prof.user_id) {
+      await adminSb.auth.admin.deleteUser(prof.user_id);
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("[API /admin/staff DELETE]", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

@@ -16,8 +16,16 @@ import {
 import { motion, AnimatePresence } from "framer-motion";
 import { createTenant, updateTenant } from "@/services/tenantService";
 import { signOut, getCurrentProfile } from "@/services/authService";
-import { getStaffByTenant, createStaffAccount, toggleStaffActive, ROLE_LABEL, ROLE_COLOR } from "@/services/staffService";
-import type { StaffListItem } from "@/services/staffService";
+import {
+  createStaffAccount,
+  getAllStaff,
+  getStaffByTenant,
+  toggleStaffActive,
+  deleteStaffAccount,
+  ROLE_LABEL,
+  ROLE_COLOR,
+  type StaffListItem,
+} from "@/services/staffService";
 import { useRouter } from "next/navigation";
 import type { Tenant, Category, Product, BusinessLogic, FinanceConfig, ReceiptConfig, ManualPaymentChannel, UserRole } from "@/types";
 
@@ -82,7 +90,7 @@ export default function SuperAdminPage() {
       if (editingProd) {
         prodForm.setFieldsValue({
           name: editingProd.name, description: editingProd.description,
-          base_price: editingProd.base_price, image_url: editingProd.image_urls[0] ?? "",
+          base_price: editingProd.base_price, discount_price: editingProd.discount_price, image_url: editingProd.image_urls[0] ?? "",
           category_id: editingProd.category_id, is_available: editingProd.is_available,
           is_featured: editingProd.is_featured, stock_count: editingProd.stock_count,
           sort_order: editingProd.sort_order, labels: editingProd.labels.join(", "),
@@ -147,10 +155,20 @@ export default function SuperAdminPage() {
   const handleToggleStaff = async (profileId: string, currentActive: boolean) => {
     const ok = await toggleStaffActive(profileId, !currentActive);
     if (ok) {
-      message.success(currentActive ? "Akun dinonaktifkan" : "Akun diaktifkan");
+      message.success(`Status akun staf berhasil ${!currentActive ? "diaktifkan" : "dinonaktifkan"}`);
       await loadStaff(staffTenantFilter);
     } else {
       message.error("Gagal mengubah status akun");
+    }
+  };
+
+  const handleDeleteStaff = async (profileId: string) => {
+    const ok = await deleteStaffAccount(profileId);
+    if (ok) {
+      message.success("Akun staf berhasil dihapus permanen");
+      await loadStaff(staffTenantFilter);
+    } else {
+      message.error("Gagal menghapus akun staf");
     }
   };
   // ─────────────────────────────────────────────────────────────────────
@@ -302,18 +320,36 @@ export default function SuperAdminPage() {
 
   const saveProd = async (vals: Record<string, unknown>) => {
     if (!menuDrawer.tenant) return;
-    const { image_url, labels: labelsRaw, ...rest } = vals;
+    const { image_url, labels: labelsRaw, discount_price, base_price, stock_count, ...rest } = vals;
     const payload = {
       ...rest,
+      base_price: Number(base_price),
+      discount_price: discount_price ? Number(discount_price) : null,
+      stock_count: stock_count !== undefined && stock_count !== null && stock_count !== "" ? Number(stock_count) : null,
       image_urls: image_url ? [image_url] : [],
       labels: ((labelsRaw as string) ?? "").split(",").map((s: string) => s.trim()).filter(Boolean),
     };
-    if (editingProd) {
-      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "product", _itemId: editingProd.id, ...payload }) });
-    } else {
-      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "product", ...payload }) });
+    try {
+      let res: Response;
+      if (editingProd) {
+        res = await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "product", _itemId: editingProd.id, ...payload }) });
+      } else {
+        res = await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "product", ...payload }) });
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        message.error(data.error || "Gagal menyimpan produk. Pastikan kolom database 'discount_price' sudah dimigrasikan.");
+        return;
+      }
+      message.success("Produk & diskon promo berhasil disimpan!");
+      prodForm.resetFields();
+      setProdModalOpen(false);
+      setEditingProd(null);
+      refreshMenu();
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Terjadi kesalahan saat menyimpan produk";
+      message.error(errMsg);
     }
-    prodForm.resetFields(); setProdModalOpen(false); setEditingProd(null); refreshMenu();
   };
 
   const deleteProd = async (id: string) => {
@@ -772,14 +808,25 @@ export default function SuperAdminPage() {
                       render: (v: boolean) => <Tag color={v ? "success" : "default"}>{v ? "Aktif" : "Nonaktif"}</Tag>,
                     },
                     {
-                      title: "Aksi", width: 100,
+                      title: "Aksi", width: 160,
                       render: (_: unknown, r: StaffListItem) => (
-                        <button
-                          onClick={() => handleToggleStaff(r.id, r.is_active)}
-                          style={{ background: r.is_active ? "#fee2e2" : "#d1fae5", color: r.is_active ? "#b91c1c" : "#065f46", border: "none", borderRadius: 7, padding: "4px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
-                        >
-                          {r.is_active ? "Nonaktifkan" : "Aktifkan"}
-                        </button>
+                        <Space>
+                          <button
+                            onClick={() => handleToggleStaff(r.id, r.is_active)}
+                            style={{ background: r.is_active ? "#fee2e2" : "#d1fae5", color: r.is_active ? "#b91c1c" : "#065f46", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                          >
+                            {r.is_active ? "Nonaktifkan" : "Aktifkan"}
+                          </button>
+                          <Popconfirm
+                            title="Hapus akun staf ini?"
+                            description="Akun auth dan profil staf akan dihapus permanen."
+                            onConfirm={() => handleDeleteStaff(r.id)}
+                            okText="Hapus"
+                            okButtonProps={{ danger: true }}
+                          >
+                            <Button size="small" danger icon={<DeleteOutlined />} style={{ fontSize: 11 }} />
+                          </Popconfirm>
+                        </Space>
                       ),
                     },
                   ]}
@@ -1077,10 +1124,15 @@ export default function SuperAdminPage() {
       >
         <Form form={prodForm} onFinish={saveProd} layout="vertical" requiredMark="optional">
           <Row gutter={12}>
-            <Col span={16}><Form.Item name="name" label="Nama Produk" rules={[{ required: true }]}><Input placeholder="Espresso" /></Form.Item></Col>
-            <Col span={8}><Form.Item name="base_price" label="Harga (Rp)" rules={[{ required: true }]}><InputNumber min={0}
+            <Col span={12}><Form.Item name="name" label="Nama Produk" rules={[{ required: true }]}><Input placeholder="Espresso" /></Form.Item></Col>
+            <Col span={6}><Form.Item name="base_price" label="Harga Normal (Rp)" rules={[{ required: true }]}><InputNumber min={0}
               formatter={(v) => Number(v || 0).toLocaleString("id-ID")}
               parser={(v) => Number((v ?? "").replace(/[^\d]/g, "")) as unknown as 0}
+              style={{ width: "100%" }} /></Form.Item></Col>
+            <Col span={6}><Form.Item name="discount_price" label="Harga Promo (Rp)" extra="Kosongkan jika tdk ada promo"><InputNumber min={0}
+              placeholder="Promo"
+              formatter={(v) => (v ? Number(v).toLocaleString("id-ID") : "")}
+              parser={(v) => (v ? Number(v.replace(/[^\d]/g, "")) : undefined) as unknown as 0}
               style={{ width: "100%" }} /></Form.Item></Col>
           </Row>
           <Form.Item name="description" label="Deskripsi"><Input.TextArea rows={2} /></Form.Item>

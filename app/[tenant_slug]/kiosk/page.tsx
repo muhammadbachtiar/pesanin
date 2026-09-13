@@ -37,6 +37,7 @@ export default function KioskPage({
   const [tableRecord, setTableRecord] = useState<TableRecord | null>(null);
   const [tableInputValue, setTableInputValue] = useState("");
   const [customerName, setCustomerName] = useState("");
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [activeProduct, setActiveProduct] = useState<Product | null>(null);
   const [modalQuantity, setModalQuantity] = useState(1);
@@ -115,7 +116,13 @@ export default function KioskPage({
 
   const addToCart = (product: Product, quantity = 1, notes = "") => {
     if (quantity <= 0) return;
-    const unit_price = product.base_price;
+    const hasPromo =
+      product.discount_price !== null &&
+      product.discount_price !== undefined &&
+      product.discount_price > 0 &&
+      product.discount_price < product.base_price;
+    const unit_price = hasPromo ? product.discount_price! : product.base_price;
+
     const existingIndex = cart.findIndex(
       (c) => c.product.id === product.id && c.selected_variants.length === 0 && (c.notes || "") === notes
     );
@@ -171,6 +178,14 @@ export default function KioskPage({
 
   const totalItems = cart.reduce((s, c) => s + c.quantity, 0);
   const subtotal = cart.reduce((s, c) => s + c.unit_price * c.quantity, 0);
+  const totalSavings = cart.reduce((sum, c) => {
+    const hasPromo =
+      c.product.discount_price !== null &&
+      c.product.discount_price !== undefined &&
+      c.product.discount_price > 0 &&
+      c.product.discount_price < c.product.base_price;
+    return sum + (hasPromo ? (c.product.base_price - c.product.discount_price!) * c.quantity : 0);
+  }, 0);
 
   const handleCheckout = async () => {
     if (!tenant || isCheckingOut) return;
@@ -242,6 +257,9 @@ export default function KioskPage({
         // Kasir yang akan mengkonfirmasi metode pembayaran pelanggan
         setScreen("success");
       }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Terjadi kesalahan saat memproses pesanan.";
+      setCheckoutError(errMsg);
     } finally {
       setIsCheckingOut(false);
     }
@@ -552,9 +570,23 @@ export default function KioskPage({
                     <div className="flex-1 flex items-start justify-between gap-2">
                       <div className="flex-1">
                         <p className="font-semibold text-base leading-tight mt-0.5">{item.product.name}</p>
-                        <p className="text-sm font-bold mt-1" style={{ color: "var(--tenant-primary)" }}>
-                          Rp {item.unit_price.toLocaleString("id-ID")}
-                        </p>
+                        {item.product.discount_price && item.product.discount_price > 0 && item.product.discount_price < item.product.base_price ? (
+                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                            <span className="text-xs text-gray-400 line-through">
+                              Rp {Number(item.product.base_price).toLocaleString("id-ID")}
+                            </span>
+                            <span className="text-sm font-bold text-rose-600">
+                              Rp {item.unit_price.toLocaleString("id-ID")}
+                            </span>
+                            <span className="text-[9px] font-black bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded-full">
+                              🔥 PROMO
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-sm font-bold mt-1" style={{ color: "var(--tenant-primary)" }}>
+                            Rp {item.unit_price.toLocaleString("id-ID")}
+                          </p>
+                        )}
                       </div>
                       <div className="flex flex-col items-end gap-1">
                         <p className="font-bold text-lg flex-shrink-0">
@@ -562,7 +594,7 @@ export default function KioskPage({
                         </p>
                         <button
                           onClick={() => removeFromCart(i)}
-                          className="text-red-400 text-xs font-bold mt-1"
+                          className="text-red-400 text-xs font-bold mt-1 cursor-pointer"
                         >
                           Hapus ✕
                         </button>
@@ -586,12 +618,18 @@ export default function KioskPage({
               ))}
             </div>
             <div className="p-4 border-t bg-white space-y-3">
-              <div className="flex justify-between font-bold text-lg">
+              {totalSavings > 0 && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-3.5 py-2 rounded-xl text-xs font-bold flex items-center justify-between">
+                  <span>🎉 Promo Diskon Diterapkan</span>
+                  <span>Hemat Rp {totalSavings.toLocaleString("id-ID")}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-base font-bold">
                 <span>Subtotal</span>
                 <span>Rp {subtotal.toLocaleString("id-ID")}</span>
               </div>
               <button
-                className="btn-primary w-full py-4 text-lg font-bold rounded-xl"
+                className="btn-primary w-full py-4 text-lg font-bold rounded-xl cursor-pointer"
                 onClick={() => setScreen("customer_info")}
               >
                 Lanjut ke Informasi Pemesan →
@@ -1037,103 +1075,140 @@ export default function KioskPage({
 
         {/* PRODUCT DETAIL MODAL */}
         <AnimatePresence>
-          {activeProduct && (
-            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
-              <motion.div
-                className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                onClick={() => setActiveProduct(null)}
-              />
-              <motion.div
-                className="bg-white rounded-t-3xl sm:rounded-2xl w-full max-w-md flex flex-col overflow-hidden z-10 shadow-2xl relative"
-                initial={{ opacity: 0, y: 24, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 16, scale: 0.98 }}
-                transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-                style={{ maxHeight: "90vh" }}
-              >
-                {activeProduct.image_urls[0] ? (
-                  <div className="w-full bg-gray-50 flex items-center justify-center p-2" style={{ height: 240 }}>
-                    <img src={activeProduct.image_urls[0]} alt={activeProduct.name} className="w-full h-full object-contain" />
-                  </div>
-                ) : (
-                  <div className="w-full flex items-center justify-center text-5xl" style={{ height: 200, background: "var(--tenant-primary)18" }}>🍽️</div>
-                )}
+          {activeProduct && (() => {
+            const hasPromo =
+              activeProduct.discount_price !== null &&
+              activeProduct.discount_price !== undefined &&
+              activeProduct.discount_price > 0 &&
+              activeProduct.discount_price < activeProduct.base_price;
+            const effectivePrice = hasPromo ? activeProduct.discount_price! : activeProduct.base_price;
+            const discountPct = hasPromo
+              ? Math.round(((activeProduct.base_price - activeProduct.discount_price!) / activeProduct.base_price) * 100)
+              : 0;
 
-                <div className="p-5 overflow-y-auto flex-1 flex flex-col gap-3">
-                  <div className="flex justify-between items-start gap-4">
-                    <h2 className="text-xl font-bold leading-tight">{activeProduct.name}</h2>
-                    <p className="font-bold text-lg flex-shrink-0" style={{ color: "var(--tenant-primary)" }}>
-                      Rp {Number(activeProduct.base_price).toLocaleString("id-ID")}
-                    </p>
+            return (
+              <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4">
+                <motion.div
+                  className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  onClick={() => setActiveProduct(null)}
+                />
+                <motion.div
+                  className="bg-white rounded-t-3xl sm:rounded-2xl w-full max-w-md flex flex-col overflow-hidden z-10 shadow-2xl relative"
+                  initial={{ opacity: 0, y: 24, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 16, scale: 0.98 }}
+                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                  style={{ maxHeight: "90vh" }}
+                >
+                  {/* Image Header with Promo Badge */}
+                  <div className="relative w-full bg-gray-50 flex items-center justify-center p-2" style={{ height: 240 }}>
+                    {activeProduct.image_urls[0] ? (
+                      <img src={activeProduct.image_urls[0]} alt={activeProduct.name} className="w-full h-full object-contain" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-5xl" style={{ background: "var(--tenant-primary)18" }}>🍽️</div>
+                    )}
+                    {hasPromo && (
+                      <span className="absolute top-4 left-4 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-xs font-black px-3 py-1 rounded-full shadow-lg border border-white/40 flex items-center gap-1">
+                        <span>🔥</span> PROMO DISKON {discountPct}%
+                      </span>
+                    )}
                   </div>
 
-                  {(activeProduct.is_featured || activeProduct.labels.length > 0) && (
-                    <div className="flex flex-wrap gap-1">
-                      {activeProduct.is_featured && (
-                        <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white shadow-xs" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>⭐ Unggulan</span>
-                      )}
-                      {activeProduct.labels.map((l) => (
-                        <span key={l} className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 capitalize">
-                          {l.replace(/_/g, " ")}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="mt-2">
-                    <h3 className="text-sm font-bold text-gray-800 mb-1">Deskripsi</h3>
-                    <p className="text-gray-500 text-sm leading-relaxed whitespace-pre-wrap">
-                      {activeProduct.description || "Tidak ada deskripsi tersedia untuk produk ini."}
-                    </p>
-                  </div>
-                  <div className="mt-1 flex flex-col gap-4 border-t pt-4">
-                    <div>
-                      <h3 className="text-sm font-bold text-gray-800 mb-2">Jumlah Pesanan</h3>
-                      <div className="flex items-center gap-3">
-                        <button onClick={() => setModalQuantity(Math.max(1, modalQuantity - 1))} className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-xl cursor-pointer">-</button>
-                        <input type="number" value={modalQuantity || ""} onChange={(e) => setModalQuantity(Math.max(1, parseInt(e.target.value) || 1))} className="w-16 h-10 text-center text-lg font-bold border-b-2 bg-transparent outline-none p-1" style={{ borderColor: 'var(--tenant-primary)' }} />
-                        <button onClick={() => setModalQuantity(modalQuantity + 1)} className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-xl cursor-pointer" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>+</button>
+                  <div className="p-5 overflow-y-auto flex-1 flex flex-col gap-3">
+                    <div className="flex justify-between items-start gap-4">
+                      <div>
+                        <h2 className="text-xl font-bold leading-tight">{activeProduct.name}</h2>
+                        {hasPromo && (
+                          <span className="inline-block text-[11px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full mt-1.5">
+                            Hemat Rp {(activeProduct.base_price - activeProduct.discount_price!).toLocaleString("id-ID")}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-col items-end flex-shrink-0">
+                        {hasPromo && (
+                          <span className="text-xs text-gray-400 line-through font-semibold">
+                            Rp {Number(activeProduct.base_price).toLocaleString("id-ID")}
+                          </span>
+                        )}
+                        <p
+                          className="font-black text-xl leading-tight"
+                          style={{ color: hasPromo ? "#e11d48" : "var(--tenant-primary)" }}
+                        >
+                          Rp {Number(effectivePrice).toLocaleString("id-ID")}
+                        </p>
                       </div>
                     </div>
 
-                    <div>
-                      <h3 className="text-sm font-bold text-gray-800 mb-2">Catatan Tambahan</h3>
-                      <textarea
-                        value={modalNotes}
-                        onChange={(e) => setModalNotes(e.target.value)}
-                        placeholder="Contoh: Jangan terlalu pedas, tambah es, dll."
-                        className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-[var(--tenant-primary)] text-sm"
-                        rows={2}
-                      />
+                    {(activeProduct.is_featured || activeProduct.labels.length > 0) && (
+                      <div className="flex flex-wrap gap-1">
+                        {activeProduct.is_featured && (
+                          <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white shadow-xs" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>⭐ Unggulan</span>
+                        )}
+                        {activeProduct.labels.map((l) => (
+                          <span key={l} className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 capitalize">
+                            {l.replace(/_/g, " ")}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="mt-2">
+                      <h3 className="text-sm font-bold text-gray-800 mb-1">Deskripsi</h3>
+                      <p className="text-gray-500 text-sm leading-relaxed whitespace-pre-wrap">
+                        {activeProduct.description || "Tidak ada deskripsi tersedia untuk produk ini."}
+                      </p>
+                    </div>
+                    <div className="mt-1 flex flex-col gap-4 border-t pt-4">
+                      <div>
+                        <h3 className="text-sm font-bold text-gray-800 mb-2">Jumlah Pesanan</h3>
+                        <div className="flex items-center gap-3">
+                          <button onClick={() => setModalQuantity(Math.max(1, modalQuantity - 1))} className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-xl cursor-pointer">-</button>
+                          <input type="number" value={modalQuantity || ""} onChange={(e) => setModalQuantity(Math.max(1, parseInt(e.target.value) || 1))} className="w-16 h-10 text-center text-lg font-bold border-b-2 bg-transparent outline-none p-1" style={{ borderColor: 'var(--tenant-primary)' }} />
+                          <button onClick={() => setModalQuantity(modalQuantity + 1)} className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-xl cursor-pointer" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>+</button>
+                        </div>
+                      </div>
+
+                      <div>
+                        <h3 className="text-sm font-bold text-gray-800 mb-2">Catatan Tambahan</h3>
+                        <textarea
+                          value={modalNotes}
+                          onChange={(e) => setModalNotes(e.target.value)}
+                          placeholder="Contoh: Jangan terlalu pedas, tambah es, dll."
+                          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-[var(--tenant-primary)] text-sm"
+                          rows={2}
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="p-4 border-t flex gap-3 bg-white">
-                  <button
-                    className="px-6 py-4 rounded-xl font-bold border-2 text-gray-600 border-gray-200 cursor-pointer active:bg-gray-100 transition-colors"
-                    onClick={() => setActiveProduct(null)}
-                  >
-                    Tutup
-                  </button>
-                  <button
-                    className="flex-1 py-4 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-lg active:scale-95 transition-transform cursor-pointer shadow-md"
-                    style={{ background: "var(--tenant-primary)" }}
-                    onClick={() => {
-                      addToCart(activeProduct, modalQuantity, modalNotes);
-                      setActiveProduct(null);
-                    }}
-                  >
-                    Tambah <span>Rp {(Number(activeProduct.base_price) * modalQuantity).toLocaleString("id-ID")}</span>
-                  </button>
-                </div>
-              </motion.div>
-            </div>
-          )}
+                  <div className="p-4 border-t flex gap-3 bg-white">
+                    <button
+                      className="px-6 py-4 rounded-xl font-bold border-2 text-gray-600 border-gray-200 cursor-pointer active:bg-gray-100 transition-colors"
+                      onClick={() => setActiveProduct(null)}
+                    >
+                      Tutup
+                    </button>
+                    <button
+                      className="flex-1 py-4 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-lg active:scale-95 transition-transform cursor-pointer shadow-md"
+                      style={{ background: hasPromo ? "#e11d48" : "var(--tenant-primary)" }}
+                      onClick={() => {
+                        addToCart(activeProduct, modalQuantity, modalNotes);
+                        setActiveProduct(null);
+                      }}
+                    >
+                      <span>Tambah</span>
+                      <span>•</span>
+                      <span>Rp {(Number(effectivePrice) * modalQuantity).toLocaleString("id-ID")}</span>
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            );
+          })()}
         </AnimatePresence>
 
         {/* CONFIRM DELETE MODAL */}
@@ -1175,6 +1250,46 @@ export default function KioskPage({
                   Hapus
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* CHECKOUT ERROR / OUT OF STOCK MODAL */}
+        {checkoutError && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <motion.div
+              className="absolute inset-0 bg-black/50 backdrop-blur-xs"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setCheckoutError(null)}
+            />
+            <motion.div
+              className="bg-white rounded-3xl w-full max-w-sm flex flex-col overflow-hidden z-[71] shadow-2xl p-6 text-center space-y-4"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            >
+              <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center text-3xl mx-auto shadow-inner">
+                ⚠️
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-gray-900">Pesanan Belum Berhasil</h3>
+                <p className="text-gray-600 text-xs font-medium mt-1.5 leading-relaxed">
+                  {checkoutError}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="w-full py-3.5 rounded-xl font-bold text-sm text-white shadow-md active:scale-95 transition-transform cursor-pointer"
+                style={{ background: "var(--tenant-primary)" }}
+                onClick={() => {
+                  setCheckoutError(null);
+                  setScreen("cart");
+                }}
+              >
+                Cek Keranjang
+              </button>
             </motion.div>
           </div>
         )}

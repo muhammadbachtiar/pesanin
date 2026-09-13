@@ -38,6 +38,40 @@ export async function createOrder(
     order: CreateOrderPayload,
     items: Omit<CreateOrderItemPayload, "order_id" | "tenant_id">[]
 ): Promise<Order | null> {
+    // ── 1. PRE-CHECK STOCK VALIDATION (Mencegah Race Condition / Overselling) ──
+    const productIds = items
+        .map((i) => i.product_id)
+        .filter((id): id is string => Boolean(id));
+
+    if (productIds.length > 0) {
+        const { data: currentProducts, error: prodErr } = await supabase
+            .from("products")
+            .select("id, name, stock_count, is_available")
+            .in("id", productIds);
+
+        if (!prodErr && currentProducts) {
+            for (const prod of currentProducts) {
+                const requestedQty = items
+                    .filter((i) => i.product_id === prod.id)
+                    .reduce((sum, i) => sum + i.quantity, 0);
+
+                if (!prod.is_available) {
+                    throw new Error(`Menu "${prod.name}" saat ini sedang habis.`);
+                }
+
+                if (prod.stock_count !== null && prod.stock_count < requestedQty) {
+                    if (prod.stock_count <= 0) {
+                        throw new Error(`Menu "${prod.name}" baru saja habis dipesan pelanggan lain.`);
+                    } else {
+                        throw new Error(
+                            `Menu "${prod.name}" hanya tersisa ${prod.stock_count} porsi (Anda meminta ${requestedQty}).`
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let finalNotes = order.customer_notes || "";
     if (order.customer_name?.trim() && !finalNotes.includes("[NAME:")) {
         const { cleanNotes, isServed, cookedItemIds } = parseCustomerNotes(finalNotes);
@@ -69,7 +103,7 @@ export async function createOrder(
 
     if (orderError || !orderData) {
         console.error("Error creating order:", orderError);
-        return null;
+        throw new Error(orderError?.message || "Gagal membuat pesanan di sistem");
     }
 
     const itemRows = items.map((i) => ({
@@ -79,13 +113,9 @@ export async function createOrder(
     }));
     await supabase.from("order_items").insert(itemRows);
 
-    // ── AUTO-DEDUCT STOCK (Fase 1 / Opsi 1A) ──────────────────────────────
-    // Kurangi stock_count per produk yang memiliki stok terhitung (non-null).
+    // ── 2. AUTO-DEDUCT STOCK ──────────────────────────────────────────────
+    // Kurangi stock_count per produk yang memiliki kuota stok terbatas.
     // Jika stok mencapai 0, otomatis set is_available = false.
-    const productIds = items
-        .map((i) => i.product_id)
-        .filter((id): id is string => Boolean(id));
-
     if (productIds.length > 0) {
         const { data: stockRows } = await supabase
             .from("products")

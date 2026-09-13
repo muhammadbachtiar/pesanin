@@ -14,6 +14,7 @@ import type { Order, Tenant, Profile, Product, CartItem, PaymentMethodType, Cate
 import { ProductCard } from "@/components/ProductCard";
 import { TenantRoleGuard } from "@/components/auth/TenantRoleGuard";
 import { useBluetoothPrinter } from "@/hooks/useBluetoothPrinter";
+import { supabase } from "@/lib/supabase";
 
 const STATUS_COLOR: Record<string, string> = {
   pending: "orange", cooking: "blue", ready: "green",
@@ -203,6 +204,30 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       ]);
       setProducts(allProds);
       setCategories(cats);
+
+      // Realtime subscription: update produk & sisa stok secara langsung saat kiosk/admin bertransaksi
+      const productChannel = supabase
+        .channel(`cashier-products-${t.id}`)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "products", filter: `tenant_id=eq.${t.id}` },
+          (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
+            if (payload.eventType === "UPDATE") {
+              setProducts((prev) =>
+                prev.map((p) => (p.id === (payload.new as unknown as Product).id ? { ...p, ...(payload.new as unknown as Product) } : p))
+              );
+            } else if (payload.eventType === "INSERT") {
+              setProducts((prev) => [...prev, payload.new as unknown as Product]);
+            } else if (payload.eventType === "DELETE") {
+              setProducts((prev) => prev.filter((p) => p.id !== (payload.old as { id: string }).id));
+            }
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(productChannel);
+      };
     }
     init();
   }, [params, refreshOrders]);
@@ -448,7 +473,17 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   };
 
   // ──────────────────────────────── POS Cart helpers ────────────────────────────────
+  const getProductEffectivePrice = (product: Product) => {
+    const hasPromo =
+      product.discount_price !== null &&
+      product.discount_price !== undefined &&
+      product.discount_price > 0 &&
+      product.discount_price < product.base_price;
+    return hasPromo ? product.discount_price! : product.base_price;
+  };
+
   const addToCart = (product: Product) => {
+    const effectivePrice = getProductEffectivePrice(product);
     setCart((prev) => {
       const idx = prev.findIndex((c) => c.product.id === product.id);
       if (idx >= 0) {
@@ -456,11 +491,12 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         next[idx] = { ...next[idx], quantity: next[idx].quantity + 1 };
         return next;
       }
-      return [...prev, { product, quantity: 1, selected_variants: [], notes: "", unit_price: product.base_price }];
+      return [...prev, { product, quantity: 1, selected_variants: [], notes: "", unit_price: effectivePrice }];
     });
   };
 
   const updateProductQuantityInCart = (product: Product, newQty: number) => {
+    const effectivePrice = getProductEffectivePrice(product);
     setCart((prev) => {
       const idx = prev.findIndex((c) => c.product.id === product.id);
       if (newQty <= 0) {
@@ -471,7 +507,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         next[idx] = { ...next[idx], quantity: newQty };
         return next;
       }
-      return [...prev, { product, quantity: newQty, selected_variants: [], notes: "", unit_price: product.base_price }];
+      return [...prev, { product, quantity: newQty, selected_variants: [], notes: "", unit_price: effectivePrice }];
     });
   };
 
@@ -496,6 +532,14 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   };
 
   const cartSubtotal = cart.reduce((s, c) => s + c.unit_price * c.quantity, 0);
+  const cartSavings = cart.reduce((sum, c) => {
+    const hasPromo =
+      c.product.discount_price !== null &&
+      c.product.discount_price !== undefined &&
+      c.product.discount_price > 0 &&
+      c.product.discount_price < c.product.base_price;
+    return sum + (hasPromo ? (c.product.base_price - c.product.discount_price!) * c.quantity : 0);
+  }, 0);
   const fc = tenant?.finance_config;
   const cartTax = fc ? Math.round(cartSubtotal * fc.tax_percentage / 100) : 0;
   const cartSvc = fc ? Math.round(cartSubtotal * fc.service_charge_percentage / 100) : 0;
@@ -589,6 +633,9 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       }
 
       if (tenant) refreshOrders(tenant.id);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : "Gagal membuat pesanan";
+      message.error(errMsg);
     } finally {
       setSubmitting((s) => ({ ...s, createOrder: false }));
     }
@@ -673,10 +720,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   );
 
   // ──────────────────────────── Filtered product list ───────────────────────────────
+  // Menu yang habis TIDAK di-filter keluar, melainkan tetap ditampilkan dalam keadaan buram/disabled oleh ProductCard
   const visibleProducts = products.filter((p) => {
     const matchCat = selectedCat ? p.category_id === selectedCat : true;
     const matchQ = p.name.toLowerCase().includes(productSearch.toLowerCase());
-    return p.is_available && matchCat && matchQ;
+    return matchCat && matchQ;
   });
 
   const bl = tenant?.business_logic;
@@ -2352,8 +2400,14 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
               <div className="border-t p-3.5 sm:p-4 space-y-3 bg-white flex-shrink-0 shadow-lg">
                 {cart.length > 0 && (
                   <div className="space-y-1.5 text-xs text-gray-600 border-b pb-2.5">
+                    {cartSavings > 0 && (
+                      <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center justify-between mb-1.5">
+                        <span>🎉 Hemat Promo Menu:</span>
+                        <span>-Rp {cartSavings.toLocaleString("id-ID")}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between">
-                      <span>Subtotal</span>
+                      <span>Subtotal Item</span>
                       <span className="font-semibold">Rp {cartSubtotal.toLocaleString("id-ID")}</span>
                     </div>
                     {cartTax > 0 && (

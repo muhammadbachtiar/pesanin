@@ -64,6 +64,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     product.stock_count > 0 &&
     product.stock_count <= 5;
 
+  // Hitung diskon promo jika discount_price valid & lebih murah dari base_price
+  const hasPromo =
+    product.discount_price !== null &&
+    product.discount_price !== undefined &&
+    product.discount_price > 0 &&
+    product.discount_price < product.base_price;
+
+  const effectivePrice = hasPromo ? product.discount_price! : product.base_price;
+  const discountPct = hasPromo
+    ? Math.round(((product.base_price - product.discount_price!) / product.base_price) * 100)
+    : 0;
+
   const handleDecrease = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onUpdateQuantity) onUpdateQuantity(product, Math.max(0, quantity - 1));
@@ -88,11 +100,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       // ── Root card: NO onClick — each zone handles its own click ──
       className="relative text-left rounded-2xl border bg-white transition-all flex flex-col select-none group overflow-hidden"
       style={{
-        borderColor: isOutOfStock ? "#e2e8f0" : quantity > 0 ? primaryColor : "#e2e8f0",
+        borderColor: isOutOfStock ? "#e2e8f0" : quantity > 0 ? primaryColor : hasPromo ? "#fbcfe8" : "#e2e8f0",
         boxShadow: isOutOfStock
           ? "0 1px 4px rgba(0,0,0,0.05)"
           : quantity > 0
           ? `0 0 0 2.5px ${primaryColor}40, 0 2px 10px rgba(0,0,0,0.08)`
+          : hasPromo
+          ? "0 2px 8px rgba(244,63,94,0.08)"
           : "0 1px 4px rgba(0,0,0,0.07)",
         minHeight: isCashier ? 188 : 220,
         opacity: isOutOfStock ? 0.55 : 1,
@@ -133,18 +147,27 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </span>
         )}
 
+        {/* Badge Promo Diskon – top left over image (jika tidak habis) */}
+        {hasPromo && !isOutOfStock && (
+          <span className="absolute top-2 left-2 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full z-10 shadow-md flex items-center gap-0.5 border border-white/40">
+            <span>🔥</span> -{discountPct}%
+          </span>
+        )}
+
         {/* Badge HABIS — tampil di semua role ketika out of stock */}
         {isOutOfStock && (
-          <div className="absolute inset-0 flex items-center justify-center z-20 bg-gray-900/30">
-            <span className="bg-gray-800/80 text-white text-[10px] font-black px-3 py-1.5 rounded-full tracking-wider uppercase border border-gray-600/40">
+          <div className="absolute inset-0 flex items-center justify-center z-20 bg-gray-900/40 backdrop-blur-[1px]">
+            <span className="bg-gray-900/90 text-white text-[10px] font-black px-3 py-1.5 rounded-full tracking-wider uppercase border border-gray-600/50 shadow-md">
               🚫 Habis
             </span>
           </div>
         )}
 
-        {/* Badge "Sisa N" — hanya di Kasir (showStockBadge), muncul di pojok kiri atas */}
-        {showLowStock && (
-          <span className="absolute top-2 left-2 bg-amber-500 text-white text-[9px] font-extrabold px-2 py-0.5 rounded-full z-10 shadow">
+        {/* Badge "Sisa N" — hanya di Kasir (showStockBadge), jika bukan promo atau diletakkan di bawah badge promo */}
+        {showLowStock && !isOutOfStock && (
+          <span
+            className={`absolute ${hasPromo ? "top-8" : "top-2"} left-2 bg-amber-500 text-white text-[9px] font-extrabold px-2 py-0.5 rounded-full z-10 shadow`}
+          >
             Sisa {product.stock_count}
           </span>
         )}
@@ -160,8 +183,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               return (
                 <span
                   key={label}
-                  className="text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none whitespace-nowrap"
-                  style={{ background: cfg.bg, color: cfg.color }}
+                  className="text-[8px] font-bold px-1.5 py-0.5 rounded-full text-white leading-none backdrop-blur-xs"
+                  style={{ background: "rgba(0,0,0,0.55)" }}
                 >
                   {cfg.emoji} {cfg.text}
                 </span>
@@ -173,25 +196,34 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
       {/* ═══════════ INFO ZONE ═══════════
           Cashier → tap adds to cart
-          Kiosk   → tap adds to cart (NOT opens modal)
+          Kiosk   → tap adds to cart (gambar yang buka modal)
       ══════════════════════════════════ */}
       <div
-        className="flex flex-col flex-1 bg-white cursor-pointer"
-        style={{ padding: "10px 10px 8px" }}
+        className="p-2.5 sm:p-3 flex-1 flex flex-col justify-between cursor-pointer"
         onClick={() => onAddToCart(product)}
       >
-        {/* Product name */}
-        <p
-          className="font-bold leading-tight text-gray-900 line-clamp-2 flex-shrink-0"
-          style={{ fontSize: 12 }}
+        {/* Product Name */}
+        <h3
+          className="font-bold text-gray-900 line-clamp-2 leading-snug group-hover:text-indigo-600 transition-colors"
+          style={{ fontSize: isCashier ? 11 : 12.5 }}
           title={product.name}
         >
           {product.name}
-        </p>
+        </h3>
 
-        {/* Cashier: label chips under name */}
+        {/* Description / Subtitle */}
+        {product.description && (
+          <p
+            className="text-gray-400 line-clamp-1 mt-0.5 leading-none"
+            style={{ fontSize: isCashier ? 9.5 : 10.5 }}
+          >
+            {product.description}
+          </p>
+        )}
+
+        {/* Cashier: inline pill labels */}
         {isCashier && rawLabels.length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1 flex-shrink-0">
+          <div className="flex flex-wrap gap-1 mt-1.5">
             {rawLabels.map((label) => {
               const cfg = getLabelCfg(label);
               return (
@@ -217,14 +249,20 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           // Prevent info-zone click from bubbling when interacting with buttons
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Price — clicking it still adds to cart */}
-          <p
-            className="font-black whitespace-nowrap leading-none flex-shrink-0 truncate cursor-pointer"
-            style={{ color: primaryColor, fontSize: 11 }}
-            onClick={() => onAddToCart(product)}
-          >
-            Rp {Number(product.base_price).toLocaleString("id-ID")}
-          </p>
+          {/* Price with strike-through for promo */}
+          <div className="flex flex-col min-w-0 cursor-pointer" onClick={() => onAddToCart(product)}>
+            {hasPromo && (
+              <span className="text-[9px] text-gray-400 line-through font-semibold leading-none">
+                Rp {Number(product.base_price).toLocaleString("id-ID")}
+              </span>
+            )}
+            <p
+              className="font-black whitespace-nowrap leading-none flex-shrink-0 truncate"
+              style={{ color: hasPromo ? "#e11d48" : primaryColor, fontSize: isCashier ? 11 : 12.5 }}
+            >
+              Rp {Number(effectivePrice).toLocaleString("id-ID")}
+            </p>
+          </div>
 
           {/* ── CASHIER footer action ──
               • qty = 0 : no button (tap card/price to add)
