@@ -9,7 +9,10 @@
  *   - OWNER      : hanya bisa buat CASHIER, KITCHEN, RUNNER di tenant sendiri
  *
  * Body (POST):
- *   { email, password, fullName, role, tenantId }
+ *   { email, password, fullName, role, tenantId, pin? }   // pin: 4–6 digit (CASHIER/KITCHEN/RUNNER)
+ *
+ * PATCH: { profileId, isActive? , pin? (string | null) }  — OWNER hanya untuk staf tenant-nya
+ * DELETE: ?profileId=...                                   — OWNER hanya untuk staf tenant-nya
  *
  * Response:
  *   { success: true, profileId: "..." }
@@ -20,19 +23,79 @@ import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import type { UserRole } from "@/types";
+import { hashPin, isValidPin } from "@/lib/pin";
+import { PIN_ELIGIBLE_ROLES } from "@/lib/rolePaths";
 
 // Role yang boleh dibuat oleh OWNER (tidak termasuk OWNER/SUPER_ADMIN)
 const OWNER_ALLOWED_ROLES: UserRole[] = ["CASHIER", "KITCHEN", "RUNNER"];
 
+function makeAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+}
+
+/**
+ * Otorisasi operasi pada akun staf yang sudah ada (PATCH/DELETE).
+ * - SUPER_ADMIN : boleh semua profil
+ * - OWNER       : hanya profil CASHIER/KITCHEN/RUNNER di tenant-nya sendiri
+ * Mengembalikan admin client jika lolos, atau NextResponse error.
+ */
+async function authorizeStaffTarget(
+  req: NextRequest,
+  profileId: string
+): Promise<{ adminSb: ReturnType<typeof makeAdminClient>; targetRole: UserRole } | NextResponse> {
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return NextResponse.json({ error: "Server config error" }, { status: 500 });
+  }
+
+  const sbSession = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { getAll() { return req.cookies.getAll(); }, setAll() {} } }
+  );
+  const { data: { user } } = await sbSession.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const adminSb = makeAdminClient();
+  const { data: requester } = await adminSb
+    .from("profiles")
+    .select("role, tenant_id")
+    .eq("user_id", user.id)
+    .eq("is_active", true)
+    .single();
+  if (!requester) return NextResponse.json({ error: "Profile pemohon tidak ditemukan" }, { status: 403 });
+
+  const { data: target } = await adminSb
+    .from("profiles")
+    .select("id, tenant_id, role")
+    .eq("id", profileId)
+    .single();
+  if (!target) return NextResponse.json({ error: "Akun profil tidak ditemukan" }, { status: 404 });
+
+  if (requester.role === "SUPER_ADMIN") return { adminSb, targetRole: target.role as UserRole };
+  if (
+    requester.role === "OWNER" &&
+    target.tenant_id === requester.tenant_id &&
+    OWNER_ALLOWED_ROLES.includes(target.role as UserRole)
+  ) {
+    return { adminSb, targetRole: target.role as UserRole };
+  }
+  return NextResponse.json({ error: "Anda tidak berhak mengelola akun ini" }, { status: 403 });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { email, password, fullName, role, tenantId } = body as {
+    const { email, password, fullName, role, tenantId, pin } = body as {
       email: string;
       password: string;
       fullName: string;
       role: UserRole;
       tenantId: string | null;
+      pin?: string;
     };
 
     // ── Validasi input dasar ──────────────────────────────────────────
@@ -41,6 +104,14 @@ export async function POST(req: NextRequest) {
     }
     if (password.length < 8) {
       return NextResponse.json({ error: "Password minimal 8 karakter" }, { status: 400 });
+    }
+    if (pin) {
+      if (!isValidPin(pin)) {
+        return NextResponse.json({ error: "PIN harus 4–6 digit angka" }, { status: 400 });
+      }
+      if (!PIN_ELIGIBLE_ROLES.includes(role)) {
+        return NextResponse.json({ error: `Role ${role} tidak memakai PIN login` }, { status: 400 });
+      }
     }
 
     // ── Verifikasi session pemohon (server-side) ──────────────────────
@@ -141,6 +212,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Gagal menyimpan profil staf" }, { status: 500 });
     }
 
+    if (pin) {
+      const { error: pinError } = await adminSb
+        .from("staff_pins")
+        .insert({ profile_id: newProfile.id, pin_hash: hashPin(pin) });
+      if (pinError) {
+        // Akun tetap dibuat; owner bisa atur ulang PIN dari tabel staf
+        console.error("[API /admin/staff POST] simpan PIN gagal:", pinError);
+        return NextResponse.json({
+          success: true,
+          profileId: newProfile.id,
+          warning: "Akun dibuat, tetapi PIN gagal disimpan. Atur ulang PIN dari daftar staf.",
+        });
+      }
+    }
+
     return NextResponse.json({ success: true, profileId: newProfile.id });
   } catch (err) {
     console.error("[API /admin/staff POST]", err);
@@ -218,34 +304,67 @@ export async function GET(req: NextRequest) {
     const { data, error } = await query.order("created_at");
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-    return NextResponse.json({ staff: data });
+    // Tandai staf yang sudah punya PIN (hash tidak pernah dikirim ke client)
+    const rows = data ?? [];
+    const ids = rows.map((r) => r.id);
+    const { data: pinRows } = ids.length
+      ? await adminSb.from("staff_pins").select("profile_id").in("profile_id", ids)
+      : { data: [] as { profile_id: string }[] };
+    const hasPin = new Set((pinRows ?? []).map((p) => p.profile_id));
+
+    return NextResponse.json({
+      staff: rows.map((r) => ({ ...r, has_pin: hasPin.has(r.id) })),
+    });
   } catch (err) {
     console.error("[API /admin/staff GET]", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 
-/** PATCH — Toggle is_active staf (aktifkan/nonaktifkan) */
+/**
+ * PATCH — Ubah akun staf.
+ *   { profileId, isActive }  → aktifkan/nonaktifkan
+ *   { profileId, pin }       → atur/ganti PIN (string 4–6 digit) atau hapus (null)
+ */
 export async function PATCH(req: NextRequest) {
   try {
-    const { profileId, isActive } = await req.json() as { profileId: string; isActive: boolean };
+    const { profileId, isActive, pin } = await req.json() as {
+      profileId: string;
+      isActive?: boolean;
+      pin?: string | null;
+    };
     if (!profileId) return NextResponse.json({ error: "profileId wajib diisi" }, { status: 400 });
 
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceKey) return NextResponse.json({ error: "Server config error" }, { status: 500 });
+    const auth = await authorizeStaffTarget(req, profileId);
+    if (auth instanceof NextResponse) return auth;
+    const { adminSb, targetRole } = auth;
 
-    const adminSb = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceKey,
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
+    if (typeof isActive === "boolean") {
+      const { error } = await adminSb.from("profiles").update({ is_active: isActive }).eq("id", profileId);
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    }
 
-    const { error } = await adminSb
-      .from("profiles")
-      .update({ is_active: isActive })
-      .eq("id", profileId);
+    if (pin !== undefined) {
+      if (pin === null) {
+        await adminSb.from("staff_pins").delete().eq("profile_id", profileId);
+      } else {
+        if (!isValidPin(pin)) {
+          return NextResponse.json({ error: "PIN harus 4–6 digit angka" }, { status: 400 });
+        }
+        if (!PIN_ELIGIBLE_ROLES.includes(targetRole)) {
+          return NextResponse.json({ error: `Role ${targetRole} tidak memakai PIN login` }, { status: 400 });
+        }
+        const { error } = await adminSb.from("staff_pins").upsert({
+          profile_id: profileId,
+          pin_hash: hashPin(pin),
+          failed_attempts: 0,
+          locked_until: null,
+          updated_at: new Date().toISOString(),
+        });
+        if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+    }
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[API /admin/staff PATCH]", err);
@@ -259,14 +378,9 @@ export async function DELETE(req: NextRequest) {
     const profileId = req.nextUrl.searchParams.get("profileId");
     if (!profileId) return NextResponse.json({ error: "profileId wajib disertakan" }, { status: 400 });
 
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!serviceKey) return NextResponse.json({ error: "Server config error" }, { status: 500 });
-
-    const adminSb = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      serviceKey,
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
+    const auth = await authorizeStaffTarget(req, profileId);
+    if (auth instanceof NextResponse) return auth;
+    const { adminSb } = auth;
 
     // Ambil user_id auth dari profile
     const { data: prof, error: getErr } = await adminSb
@@ -279,7 +393,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Akun profil tidak ditemukan" }, { status: 404 });
     }
 
-    // Hapus dari profiles
+    // Hapus dari profiles (staff_pins ikut terhapus via ON DELETE CASCADE)
     await adminSb.from("profiles").delete().eq("id", profileId);
 
     // Hapus dari auth.users

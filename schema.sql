@@ -774,6 +774,32 @@ END $$;
 -- Catatan: Validasi atomik dilakukan secara transaksional dengan row locking.
 -- Memastikan stok >= requested_quantity sebelum pesanan dibuat.
 
+-- ── PATCH 8: Quick PIN Login Staf (Kasir / Dapur / Runner) ───────────────
+-- PIN 4–6 digit untuk pergantian shift cepat di /[tenant_slug]/login.
+-- Disimpan di TABEL TERPISAH (bukan kolom profiles) karena profiles dibaca
+-- client dengan select(*) → hash PIN tidak boleh ikut terkirim ke browser.
+--   • pin_hash        : scrypt$<salt>$<hash> (dibuat di server, lib/pin.ts)
+--   • failed_attempts : percobaan salah berturut-turut
+--   • locked_until    : akun PIN dikunci sementara setelah 5x salah (5 menit)
+-- RLS aktif TANPA policy + REVOKE → anon/authenticated tidak bisa akses sama
+-- sekali. Hanya service_role (API route server) yang boleh membaca/menulis.
+CREATE TABLE IF NOT EXISTS staff_pins (
+    profile_id      UUID PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
+    pin_hash        TEXT NOT NULL,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until    TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE staff_pins ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON staff_pins FROM anon, authenticated;
+
+COMMENT ON TABLE staff_pins IS
+    'Hash PIN login cepat staf. Hanya diakses via service_role (server). Tidak ada RLS policy = deny all untuk client.';
+
+-- Agar PostgREST langsung mengenali tabel baru tanpa restart:
+NOTIFY pgrst, 'reload schema';
+
 -- ── Catatan Fase 1 & 2 (Aplikasi) ─────────────────────────────────────────
 -- Logika stok, autentikasi role, dan proteksi halaman:
 --   • createOrder (services/orderService.ts) → validasi pra-checkout + potong stock_count
@@ -781,7 +807,12 @@ END $$;
 --   • Info angka stok HANYA tampil di halaman Kasir (showStockBadge prop).
 --   • Kiosk hanya menerima sinyal aktif/nonaktif via Realtime.
 --   • types/index.ts        → UserRole 'RUNNER' + discount_price
---   • login/page.tsx        → Role-based redirect
+--   • login/page.tsx        → Gateway login Owner/Staf (email) + pencarian outlet
+--   • admin-login/page.tsx  → Login khusus SUPER_ADMIN
+--   • [tenant_slug]/login   → Login ber-branding outlet + Quick PIN staf
+--   • api/auth/pin-login    → Verifikasi PIN (staff_pins) + buat session
+--   • api/public/tenants    → Pencarian outlet publik untuk halaman login
+--   • lib/pin.ts, lib/rolePaths.ts → hash PIN & mapping role → halaman
 --   • components/auth/TenantRoleGuard.tsx → guard auth + isolasi tenant + role check
 --   • services/staffService.ts            → client wrapper CRUD akun staf
 --   • app/api/admin/staff/route.ts        → server API buat akun (service_role key)
@@ -800,4 +831,7 @@ END $$;
 --    (Harus ada: orders, order_items, products, tables)
 -- 5. Cek semua RLS profiles:
 --    SELECT policyname, cmd FROM pg_policies WHERE tablename='profiles' ORDER BY policyname;
+-- 6. Cek staff_pins (RLS aktif, tanpa policy):
+--    SELECT relrowsecurity FROM pg_class WHERE relname='staff_pins'; -- hasilnya: true
+--    SELECT count(*) FROM pg_policies WHERE tablename='staff_pins'; -- hasilnya: 0
 -- ============================================================

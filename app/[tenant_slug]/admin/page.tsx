@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Table, Tag, Button, Modal, Form, Input, Select, Switch, InputNumber, Tabs, Popconfirm, message, Card } from "antd";
 import { getTenantBySlug } from "@/services/tenantService";
 import { getAllProductsByTenant, updateProduct, toggleProductAvailability } from "@/services/productService";
-import { getStaffByTenant, createStaffAccount, toggleStaffActive, deleteStaffAccount, ROLE_LABEL, ROLE_COLOR } from "@/services/staffService";
+import { getStaffByTenant, createStaffAccount, toggleStaffActive, deleteStaffAccount, setStaffPin, ROLE_LABEL, ROLE_COLOR } from "@/services/staffService";
 import { TenantRoleGuard } from "@/components/auth/TenantRoleGuard";
 import { supabase } from "@/lib/supabase";
 import type { Tenant, Product, Profile, UserRole } from "@/types";
@@ -21,6 +21,14 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
   const [staffModalOpen, setStaffModalOpen] = useState(false);
   const [staffSubmitting, setStaffSubmitting] = useState(false);
   const [staffForm] = Form.useForm();
+
+  // PIN Modal (atur / ganti / hapus PIN Quick Login staf)
+  const [pinModal, setPinModal] = useState<{ open: boolean; staff: (Profile & { has_pin?: boolean }) | null }>({
+    open: false,
+    staff: null,
+  });
+  const [pinSubmitting, setPinSubmitting] = useState(false);
+  const [pinForm] = Form.useForm();
 
   // Product Edit Promo & Stock Modal
   const [editProductModal, setEditProductModal] = useState<{ open: boolean; product: Product | null }>({
@@ -73,6 +81,7 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
         email: values.email,
         password: values.password,
         tenantId: tenant.id,
+        pin: values.pin || undefined,
       });
 
       if (!res.success) {
@@ -110,6 +119,33 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
       if (tenant) loadData(tenant.id);
     } else {
       message.error("Gagal menghapus akun staf");
+    }
+  };
+
+  // ── Handler Atur / Hapus PIN Quick Login ──
+  const handleSavePin = async (clear = false) => {
+    try {
+      const staff = pinModal.staff;
+      if (!staff) return;
+      let pin: string | null = null;
+      if (!clear) {
+        const values = await pinForm.validateFields();
+        pin = values.pin as string;
+      }
+      setPinSubmitting(true);
+      const res = await setStaffPin(staff.id, pin);
+      if (!res.success) {
+        message.error(res.error || "Gagal menyimpan PIN");
+        return;
+      }
+      message.success(clear ? "PIN dihapus. Staf wajib login dengan email." : "PIN berhasil disimpan!");
+      pinForm.resetFields();
+      setPinModal({ open: false, staff: null });
+      if (tenant) loadData(tenant.id);
+    } catch (err) {
+      console.error("handleSavePin error:", err);
+    } finally {
+      setPinSubmitting(false);
     }
   };
 
@@ -188,10 +224,31 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
       ),
     },
     {
+      title: "PIN Cepat",
+      key: "pin",
+      render: (_: unknown, record: Profile & { has_pin?: boolean }) =>
+        record.role === "OWNER" || record.role === "SUPER_ADMIN" ? (
+          <span className="text-xs text-gray-300">—</span>
+        ) : record.has_pin ? (
+          <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700">🔑 Aktif</span>
+        ) : (
+          <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-gray-100 text-gray-500">Belum diatur</span>
+        ),
+    },
+    {
       title: "Aksi",
       key: "actions",
-      render: (_: unknown, record: Profile) => (
+      render: (_: unknown, record: Profile & { has_pin?: boolean }) => (
         <div className="flex items-center gap-2">
+          <Button
+            size="small"
+            onClick={() => {
+              pinForm.resetFields();
+              setPinModal({ open: true, staff: record });
+            }}
+          >
+            🔑 {record.has_pin ? "Ganti PIN" : "Atur PIN"}
+          </Button>
           <Button
             size="small"
             type={record.is_active ? "default" : "primary"}
@@ -380,7 +437,7 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
               size="small"
               onClick={async () => {
                 await supabase.auth.signOut();
-                window.location.href = "/login";
+                window.location.href = `/${tenant.slug}/login`;
               }}
               className="ml-2"
             >
@@ -539,6 +596,55 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
 
             <Form.Item name="password" label="Password Awal" rules={[{ required: true, min: 8, message: "Password minimal 8 karakter" }]}>
               <Input.Password placeholder="Minimal 8 karakter" />
+            </Form.Item>
+
+            <Form.Item
+              name="pin"
+              label="PIN Login Cepat (Opsional)"
+              help="4–6 digit angka. Dipakai staf untuk masuk cepat di tablet outlet saat pergantian shift."
+              rules={[{ pattern: /^\d{4,6}$/, message: "PIN harus 4–6 digit angka" }]}
+            >
+              <Input.Password inputMode="numeric" maxLength={6} placeholder="Contoh: 482916" />
+            </Form.Item>
+          </Form>
+        </Modal>
+
+        {/* ── Modal Atur PIN Staf ── */}
+        <Modal
+          title={<span className="font-bold text-base">🔑 PIN Login Cepat — {pinModal.staff?.full_name || "Staf"}</span>}
+          open={pinModal.open}
+          onCancel={() => setPinModal({ open: false, staff: null })}
+          footer={[
+            pinModal.staff?.has_pin ? (
+              <Popconfirm
+                key="clear"
+                title="Hapus PIN staf ini?"
+                description="Staf hanya bisa login dengan email & password."
+                onConfirm={() => handleSavePin(true)}
+                okText="Ya, Hapus"
+                cancelText="Batal"
+                okButtonProps={{ danger: true }}
+              >
+                <Button danger>Hapus PIN</Button>
+              </Popconfirm>
+            ) : null,
+            <Button key="cancel" onClick={() => setPinModal({ open: false, staff: null })}>Batal</Button>,
+            <Button key="save" type="primary" loading={pinSubmitting} onClick={() => handleSavePin(false)}>
+              Simpan PIN
+            </Button>,
+          ]}
+        >
+          <Form form={pinForm} layout="vertical" className="pt-2">
+            <Form.Item
+              name="pin"
+              label="PIN Baru (4–6 digit angka)"
+              help="Setelah 5x salah, PIN staf terkunci 5 menit. Menyimpan PIN baru membuka kunci."
+              rules={[
+                { required: true, message: "PIN wajib diisi" },
+                { pattern: /^\d{4,6}$/, message: "PIN harus 4–6 digit angka" },
+              ]}
+            >
+              <Input.Password inputMode="numeric" maxLength={6} placeholder="Contoh: 482916" autoComplete="off" />
             </Form.Item>
           </Form>
         </Modal>

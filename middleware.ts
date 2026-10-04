@@ -29,7 +29,7 @@ export async function middleware(request: NextRequest) {
 
     // Guard halaman super-admin
     if (path.startsWith("/super-admin") && !user) {
-        return NextResponse.redirect(new URL("/login", request.url));
+        return NextResponse.redirect(new URL("/admin-login", request.url));
     }
 
     // Guard API admin — return JSON 401

@@ -24,6 +24,12 @@ export async function signOut() {
     return sb().auth.signOut();
 }
 
+/** Slug outlet dari tenant_id (RLS: staf boleh membaca tenant miliknya sendiri). */
+export async function getTenantSlugById(tenantId: string): Promise<string | null> {
+    const { data } = await sb().from("tenants").select("slug").eq("id", tenantId).single();
+    return (data?.slug as string | undefined) ?? null;
+}
+
 export async function getProfilesByTenant(tenantId: string): Promise<Profile[]> {
     const { data, error } = await sb()
         .from("profiles")

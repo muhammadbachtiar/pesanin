@@ -13,11 +13,15 @@ export interface CreateStaffPayload {
   fullName: string;
   role: UserRole;
   tenantId: string | null;
+  /** Opsional: PIN 4–6 digit untuk Quick Login (hanya CASHIER/KITCHEN/RUNNER) */
+  pin?: string;
 }
 
 export interface StaffListItem extends Profile {
   // Profile sudah punya: id, user_id, tenant_id, full_name, role, is_active
   created_at?: string;
+  /** True jika staf sudah punya PIN Quick Login (hash tidak pernah dikirim ke client) */
+  has_pin?: boolean;
 }
 
 /** Buat akun staf baru (auth + profile) */
@@ -56,6 +60,18 @@ export async function toggleStaffActive(profileId: string, isActive: boolean): P
     body: JSON.stringify({ profileId, isActive }),
   });
   return res.ok;
+}
+
+/** Atur/ganti PIN Quick Login staf. Kirim null untuk menghapus PIN. */
+export async function setStaffPin(profileId: string, pin: string | null): Promise<{ success: boolean; error?: string }> {
+  const res = await fetch("/api/admin/staff", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profileId, pin }),
+  });
+  if (res.ok) return { success: true };
+  const data = await res.json().catch(() => ({}));
+  return { success: false, error: data.error ?? "Gagal menyimpan PIN" };
 }
 
 /** Hapus akun staf permanen (profiles + auth.users) */

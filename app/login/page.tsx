@@ -1,9 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { signIn, getCurrentProfile } from "@/services/authService";
+import { signIn, signOut, getCurrentProfile } from "@/services/authService";
 import { getSupabaseClient } from "@/lib/supabase";
+import { getRoleHome } from "@/lib/rolePaths";
+import { TenantFinder } from "@/components/auth/TenantFinder";
 import { useRouter } from "next/navigation";
 import { 
   MailOutlined, 
@@ -24,6 +27,29 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showFinder, setShowFinder] = useState(false);
+
+  /** Cari slug outlet dari tenant_id (RLS: staf boleh membaca tenant sendiri). */
+  const resolveSlug = async (tenantId: string) => {
+    const { data: tenant } = await getSupabaseClient()
+      .from("tenants")
+      .select("slug")
+      .eq("id", tenantId)
+      .single();
+    return (tenant?.slug as string | undefined) ?? null;
+  };
+
+  // Sudah punya sesi aktif → langsung ke halaman role-nya (Super Admin diabaikan: login-nya di /admin-login)
+  useEffect(() => {
+    let alive = true;
+    getCurrentProfile().then(async (p) => {
+      if (!alive || !p || p.role === "SUPER_ADMIN" || !p.tenant_id) return;
+      const slug = await resolveSlug(p.tenant_id);
+      if (alive && slug) router.replace(getRoleHome(p.role, slug));
+    });
+    return () => { alive = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,30 +64,31 @@ export default function LoginPage() {
       }
       const profile = await getCurrentProfile();
       if (!profile) {
+        await signOut();
         setError("Akun tidak ditemukan atau tidak aktif.");
         setLoading(false);
         return;
       }
       if (profile.role === "SUPER_ADMIN") {
-        router.push("/super-admin");
-      } else if (profile.tenant_id) {
-        const { data: tenant } = await getSupabaseClient()
-          .from("tenants")
-          .select("slug")
-          .eq("id", profile.tenant_id)
-          .single();
-        const slug = tenant?.slug;
-        if (!slug) { 
-          setError("Konfigurasi outlet tidak ditemukan."); 
-          setLoading(false); 
-          return; 
-        }
-        if (profile.role === "CASHIER") router.push(`/${slug}/cashier`);
-        else if (profile.role === "KITCHEN") router.push(`/${slug}/kitchen`);
-        else if (profile.role === "RUNNER") router.push(`/${slug}/runner`);
-        else if (profile.role === "OWNER") router.push(`/${slug}/admin`);
-        else router.push(`/${slug}/kiosk`);
+        await signOut();
+        setError("Akun Super Admin masuk melalui halaman khusus: /admin-login.");
+        setLoading(false);
+        return;
       }
+      if (!profile.tenant_id) {
+        await signOut();
+        setError("Akun belum terhubung ke outlet mana pun. Hubungi administrator.");
+        setLoading(false);
+        return;
+      }
+      const slug = await resolveSlug(profile.tenant_id);
+      if (!slug) {
+        await signOut();
+        setError("Konfigurasi outlet tidak ditemukan.");
+        setLoading(false);
+        return;
+      }
+      router.push(getRoleHome(profile.role, slug));
     } catch (err) {
       console.error(err);
       setError("Terjadi kesalahan sistem. Silakan coba lagi.");
@@ -270,6 +297,44 @@ export default function LoginPage() {
             </motion.button>
 
           </form>
+
+          {/* Divider + Outlet Finder (staf yang belum tahu halaman outlet-nya) */}
+          <div className="space-y-4 pt-2">
+            <div className="flex items-center gap-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+              <span className="h-px flex-1 bg-gray-200" />
+              atau
+              <span className="h-px flex-1 bg-gray-200" />
+            </div>
+
+            <button
+              id="toggle-outlet-finder"
+              type="button"
+              onClick={() => setShowFinder((s) => !s)}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40 text-gray-700 text-sm font-bold transition-all cursor-pointer"
+            >
+              🔍 Cari halaman login outlet saya (PIN Cepat)
+            </button>
+
+            <AnimatePresence initial={false}>
+              {showFinder && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden"
+                >
+                  <TenantFinder theme="light" />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <p className="text-center text-[11px] text-gray-400 pt-2">
+              Pengelola platform?{" "}
+              <Link href="/admin-login" className="font-bold text-gray-600 hover:text-indigo-600 transition-colors">
+                Masuk Admin Platform
+              </Link>
+            </p>
+          </div>
 
         </div>
 

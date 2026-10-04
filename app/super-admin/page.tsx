@@ -182,7 +182,7 @@ export default function SuperAdminPage() {
   }, []);
 
   useEffect(() => {
-    getCurrentProfile().then((p) => { if (!p || p.role !== "SUPER_ADMIN") router.replace("/login"); });
+    getCurrentProfile().then((p) => { if (!p || p.role !== "SUPER_ADMIN") router.replace("/admin-login"); });
     refresh();
   }, [refresh, router]);
 
@@ -358,7 +358,7 @@ export default function SuperAdminPage() {
     refreshMenu();
   };
 
-  const handleLogout = async () => { await signOut(); router.push("/login"); };
+  const handleLogout = async () => { await signOut(); router.push("/admin-login"); };
 
   const activeTenants = tenants.filter((t) => t.is_active).length;
 

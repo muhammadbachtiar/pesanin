@@ -43,6 +43,24 @@ async function runPatch() {
     await sql`NOTIFY pgrst, 'reload schema';`;
     console.log("✅ Schema cache PostgREST berhasil di-reload");
 
+    // PATCH 8 — Quick PIN Login Staf (sinkron dengan schema.sql)
+    console.log("🚀 Menjalankan migrasi PATCH 8: tabel staff_pins...");
+    await sql`
+      CREATE TABLE IF NOT EXISTS public.staff_pins (
+        profile_id      UUID PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
+        pin_hash        TEXT NOT NULL,
+        failed_attempts INTEGER NOT NULL DEFAULT 0,
+        locked_until    TIMESTAMPTZ,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `;
+    await sql`ALTER TABLE public.staff_pins ENABLE ROW LEVEL SECURITY;`;
+    await sql`REVOKE ALL ON public.staff_pins FROM anon, authenticated;`;
+    console.log("✅ Tabel staff_pins siap (RLS aktif, hanya service_role)");
+
+    await sql`NOTIFY pgrst, 'reload schema';`;
+    console.log("✅ Schema cache PostgREST berhasil di-reload (PATCH 8)");
+
     console.log("\n🎉 Migrasi selesai dengan sukses!");
   } catch (err) {
     console.error("❌ Gagal migrasi:", err);
