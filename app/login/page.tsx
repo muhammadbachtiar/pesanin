@@ -2,22 +2,20 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { signIn, signOut, getCurrentProfile } from "@/services/authService";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getRoleHome } from "@/lib/rolePaths";
 import { TenantFinder } from "@/components/auth/TenantFinder";
-import { useRouter } from "next/navigation";
-import { 
-  MailOutlined, 
-  LockOutlined, 
-  EyeOutlined, 
+import {
+  EyeOutlined,
   EyeInvisibleOutlined,
-  ArrowRightOutlined,
-  CheckCircleOutlined,
   ShopOutlined,
-  DashboardOutlined,
-  ThunderboltOutlined
+  CloseOutlined,
+  MailOutlined,
+  LockOutlined,
+  ArrowRightOutlined
 } from "@ant-design/icons";
 
 export default function LoginPage() {
@@ -27,9 +25,9 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [showFinder, setShowFinder] = useState(false);
+  const [showFinderModal, setShowFinderModal] = useState(false);
 
-  /** Cari slug outlet dari tenant_id (RLS: staf boleh membaca tenant sendiri). */
+  /** Cari slug outlet dari tenant_id */
   const resolveSlug = async (tenantId: string) => {
     const { data: tenant } = await getSupabaseClient()
       .from("tenants")
@@ -39,17 +37,22 @@ export default function LoginPage() {
     return (tenant?.slug as string | undefined) ?? null;
   };
 
-  // Sudah punya sesi aktif → langsung ke halaman role-nya (Super Admin diabaikan: login-nya di /admin-login)
+  // Sudah punya sesi aktif → langsung ke halaman role-nya
   useEffect(() => {
     let alive = true;
     getCurrentProfile().then(async (p) => {
-      if (!alive || !p || p.role === "SUPER_ADMIN" || !p.tenant_id) return;
-      const slug = await resolveSlug(p.tenant_id);
-      if (alive && slug) router.replace(getRoleHome(p.role, slug));
+      if (!alive || !p) return;
+      if (p.role === "SUPER_ADMIN") {
+        router.replace("/super-admin");
+        return;
+      }
+      if (p.tenant_id) {
+        const slug = await resolveSlug(p.tenant_id);
+        if (alive && slug) router.replace(getRoleHome(p.role, slug));
+      }
     });
     return () => { alive = false; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [router]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,252 +101,221 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex bg-gray-50/50 font-sans">
-      
-      {/* ── LEFT PANEL: Startup Branding & Value Prop (Desktop only) ── */}
-      <div className="hidden lg:flex lg:w-1/2 relative bg-[#09090b] overflow-hidden flex-col justify-between p-12">
-        {/* Glow Effects */}
-        <div className="absolute top-[-20%] left-[-10%] w-[80%] h-[80%] rounded-full bg-indigo-600/20 blur-[120px] pointer-events-none" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] rounded-full bg-violet-600/10 blur-[100px] pointer-events-none" />
-        
-        {/* Grid Overlay */}
-        <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f2937_1px,transparent_1px),linear-gradient(to_bottom,#1f2937_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] opacity-25 pointer-events-none" />
+    <div className="min-h-screen bg-slate-50 relative overflow-hidden flex flex-col justify-between font-sans selection:bg-indigo-500 selection:text-white text-slate-900">
 
-        {/* Top Header */}
-        <div className="relative flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/35">
-            <ShopOutlined className="text-white text-lg font-bold" />
-          </div>
-          <span className="text-white font-extrabold text-xl tracking-tight">Pesanin</span>
-          <span className="bg-indigo-500/10 text-indigo-400 text-[10px] font-bold px-2 py-0.5 rounded-full border border-indigo-500/20">v2.4</span>
-        </div>
+      {/* ── Soft Ambient Glow Orbs for Depth (Subtle & Elegant) ── */}
+      <div className="absolute top-[-10%] left-[-10%] w-[520px] h-[520px] rounded-full bg-indigo-200/25 blur-[130px] pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[520px] h-[520px] rounded-full bg-violet-200/20 blur-[130px] pointer-events-none" />
 
-        {/* Hero Section */}
-        <div className="relative my-auto max-w-lg space-y-8">
-          <div className="space-y-4">
-            <h1 className="text-4xl xl:text-5xl font-extrabold text-white leading-[1.1] tracking-tight">
-              Sistem Kiosk & POS Pintar untuk <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-violet-400">Restoran Modern.</span>
+      {/* ── Main Centered Container (Facebook UX Hierarchy) ── */}
+      <div className="relative flex-1 flex items-center justify-center px-4 sm:px-6 py-12 lg:py-24">
+        <div className="max-w-5xl w-full grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-16 items-center">
+
+          {/* ── Left Column: Brand & Single Clear Tagline ── */}
+          <div className="lg:col-span-7 text-center lg:text-left space-y-4 lg:pr-8">
+            <div className="inline-flex items-center gap-3">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-600 to-violet-600 flex items-center justify-center shadow-xl shadow-indigo-500/25 ring-4 ring-indigo-50">
+                <ShopOutlined className="text-white text-2xl font-bold" />
+              </div>
+              <span className="text-4xl sm:text-5xl font-black text-indigo-600 tracking-tight">
+                pesanin
+              </span>
+            </div>
+
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-slate-900 tracking-tight leading-[1.15]">
+              Sistem Kiosk &amp; POS Pintar untuk <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-600">Outlet Modern.</span>
             </h1>
-            <p className="text-gray-400 text-base leading-relaxed">
-              Kelola pemesanan mandiri, verifikasi kasir, dan koordinasi dapur secara realtime dalam satu platform F&B yang andal dan terintegrasi.
+
+            <p className="text-base sm:text-lg text-slate-600 font-normal leading-relaxed max-w-lg mx-auto lg:mx-0">
+              Kelola transaksi kasir, monitor pesanan dapur, dan kiosk mandiri dalam satu ekosistem realtime yang terintegrasi.
             </p>
           </div>
 
-          {/* Feature List */}
-          <div className="space-y-4">
-            {[
-              { icon: <ThunderboltOutlined className="text-amber-400 text-base" />, text: "Kiosk Mandiri responsif & minim antrean" },
-              { icon: <DashboardOutlined className="text-indigo-400 text-base" />, text: "Layar Kasir & Dapur tersinkronisasi instan" },
-              { icon: <CheckCircleOutlined className="text-emerald-400 text-base" />, text: "Konfigurasi tenant & menu dinamis dalam 1 klik" }
-            ].map((feat, i) => (
-              <motion.div 
-                key={i} 
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: i * 0.15 }}
-                className="flex items-center gap-3 text-gray-300 text-sm font-medium"
-              >
-                <div className="w-8 h-8 rounded-lg bg-gray-900 border border-gray-800 flex items-center justify-center shrink-0">
-                  {feat.icon}
+          {/* ── Right Column: Aesthetic White Card ── */}
+          <div className="lg:col-span-5 w-full max-w-[430px] mx-auto">
+            <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-[0_20px_50px_rgba(15,23,42,0.08),0_1px_3px_rgba(15,23,42,0.05)] border border-slate-200/60 p-7 sm:p-9 space-y-6">
+
+              <div>
+                <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">
+                  Selamat Datang
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Masuk menggunakan email outlet atau akun manajemen Anda.
+                </p>
+              </div>
+
+              <form onSubmit={handleLogin} className="space-y-4">
+
+                {/* Email Input */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+                    Alamat Email
+                  </label>
+                  <div className="relative group">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors pointer-events-none">
+                      <MailOutlined className="text-base" />
+                    </span>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                      autoComplete="email"
+                      placeholder="kasir@restoran.com"
+                      className="w-full pl-10 pr-4 py-3.5 rounded-xl border border-slate-200 bg-slate-50/60 text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all font-medium text-sm"
+                    />
+                  </div>
                 </div>
-                <span>{feat.text}</span>
-              </motion.div>
-            ))}
-          </div>
 
-          {/* Decorative Mockup Widget */}
-          <motion.div 
-            initial={{ opacity: 0, y: 40 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ type: "spring", stiffness: 100, delay: 0.5 }}
-            className="p-4 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md shadow-2xl flex items-center gap-4 max-w-sm"
-          >
-            <div className="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-xl shrink-0">
-              ⚡
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex justify-between items-center">
-                <span className="text-white text-xs font-bold truncate">Restoran Anda Saat Ini</span>
-                <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/10 px-1.5 py-0.5 rounded-full">Online</span>
-              </div>
-              <p className="text-[11px] text-gray-400 mt-0.5 truncate">Terhubung ke 5 Kiosk & 3 monitor Dapur</p>
-            </div>
-          </motion.div>
-        </div>
+                {/* Password Input */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+                    Kata Sandi
+                  </label>
+                  <div className="relative group">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors pointer-events-none">
+                      <LockOutlined className="text-base" />
+                    </span>
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      autoComplete="current-password"
+                      placeholder="••••••••"
+                      className="w-full pl-10 pr-11 py-3.5 rounded-xl border border-slate-200 bg-slate-50/60 text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all font-medium text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1 cursor-pointer"
+                      aria-label={showPassword ? "Sembunyikan kata sandi" : "Tampilkan kata sandi"}
+                    >
+                      {showPassword ? (
+                        <EyeInvisibleOutlined className="text-base" />
+                      ) : (
+                        <EyeOutlined className="text-base" />
+                      )}
+                    </button>
+                  </div>
+                </div>
 
-        {/* Footer */}
-        <div className="relative text-gray-500 text-xs font-medium">
-          Pesanin F&B Platform &copy; 2026. All rights reserved.
-        </div>
-      </div>
+                {/* Error Banner */}
+                <AnimatePresence mode="wait">
+                  {error && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                      className="p-3 rounded-xl border border-rose-200 bg-rose-50/80 text-rose-800 text-xs font-semibold flex items-center gap-2"
+                    >
+                      <span>⚠️</span>
+                      <span>{error}</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-      {/* ── RIGHT PANEL: Clean Startup Login Form (Mobile/Desktop) ── */}
-      <div className="w-full lg:w-1/2 flex flex-col justify-between p-6 sm:p-12 md:p-20 bg-white">
-        
-        {/* Top Header Mobile only */}
-        <div className="lg:hidden flex items-center gap-2 mb-8">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-indigo-500 to-violet-600 flex items-center justify-center">
-            <ShopOutlined className="text-white text-sm" />
-          </div>
-          <span className="text-gray-950 font-bold text-lg tracking-tight">Pesanin</span>
-        </div>
-
-        <div className="my-auto max-w-md w-full mx-auto space-y-8">
-          
-          {/* Headline */}
-          <div className="space-y-2">
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-gray-950 tracking-tight">
-              Selamat Datang Kembali
-            </h2>
-            <p className="text-gray-500 text-sm leading-relaxed">
-              Silakan masuk untuk mulai mengelola transaksi, memonitor menu dapur, dan memproses pesanan outlet Anda.
-            </p>
-          </div>
-
-          {/* Form */}
-          <form onSubmit={handleLogin} className="space-y-5">
-            
-            {/* Input Email */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-gray-700 uppercase tracking-wider block">
-                Alamat Email
-              </label>
-              <div className="relative">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400">
-                  <MailOutlined className="text-sm" />
-                </span>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  autoComplete="email"
-                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 bg-gray-50/50 outline-none text-gray-950 placeholder-gray-400 focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-500/10 transition-all text-sm font-medium"
-                  placeholder="name@restaurant.com"
-                />
-              </div>
-            </div>
-
-            {/* Input Password */}
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center">
-                <label className="text-xs font-bold text-gray-700 uppercase tracking-wider block">
-                  Password Akun
-                </label>
-              </div>
-              <div className="relative">
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400">
-                  <LockOutlined className="text-sm" />
-                </span>
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoComplete="current-password"
-                  className="w-full pl-10 pr-11 py-3 rounded-xl border border-gray-200 bg-gray-50/50 outline-none text-gray-950 placeholder-gray-400 focus:border-indigo-600 focus:bg-white focus:ring-4 focus:ring-indigo-500/10 transition-all text-sm font-medium"
-                  placeholder="••••••••"
-                />
+                {/* Submit Button */}
                 <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                  type="submit"
+                  disabled={loading}
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 active:from-indigo-700 active:to-indigo-800 text-white font-bold text-sm shadow-lg shadow-indigo-600/25 hover:shadow-indigo-600/35 hover:-translate-y-0.5 active:translate-y-0 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 flex items-center justify-center gap-2 mt-2"
                 >
-                  {showPassword ? (
-                    <EyeInvisibleOutlined className="text-base" />
+                  {loading ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      <span>Memverifikasi Akun...</span>
+                    </>
                   ) : (
-                    <EyeOutlined className="text-base" />
+                    <>
+                      <span>Masuk ke Dashboard</span>
+                      <ArrowRightOutlined className="text-xs" />
+                    </>
                   )}
                 </button>
+              </form>
+
+              {/* Divider */}
+              <div className="relative my-5">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-slate-200/80" />
+                </div>
+                <div className="relative flex justify-center text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  <span className="bg-white px-3">atau</span>
+                </div>
               </div>
+
+              {/* Secondary Button: Modal Cari Outlet (FB style "Create new account") */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowFinderModal(true)}
+                  className="w-full py-3 rounded-xl bg-emerald-50 hover:bg-emerald-100/80 active:bg-emerald-100 text-emerald-800 font-bold text-sm border border-emerald-200/70 shadow-sm hover:border-emerald-300 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <span>🔍 Cari Outlet Saya (PIN Cepat)</span>
+                </button>
+              </div>
+
             </div>
 
-            {/* Error Alert with Animation */}
-            <AnimatePresence mode="wait">
-              {error && (
-                <motion.div 
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  className="p-3.5 rounded-xl border border-rose-200 bg-rose-50 text-rose-800 text-xs font-semibold flex items-start gap-2.5"
-                >
-                  <span className="text-base leading-none">⚠️</span>
-                  <span>{error}</span>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Submit Button */}
-            <motion.button
-              type="submit"
-              disabled={loading}
-              whileTap={{ scale: 0.98 }}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[#09090b] hover:bg-gray-900 active:bg-black text-white text-sm font-bold shadow-lg shadow-gray-900/10 hover:shadow-xl transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                  <span>Mengecek Akun...</span>
-                </>
-              ) : (
-                <>
-                  <span>Masuk ke Dashboard</span>
-                  <ArrowRightOutlined className="text-xs" />
-                </>
-              )}
-            </motion.button>
-
-          </form>
-
-          {/* Divider + Outlet Finder (staf yang belum tahu halaman outlet-nya) */}
-          <div className="space-y-4 pt-2">
-            <div className="flex items-center gap-3 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-              <span className="h-px flex-1 bg-gray-200" />
-              atau
-              <span className="h-px flex-1 bg-gray-200" />
-            </div>
-
-            <button
-              id="toggle-outlet-finder"
-              type="button"
-              onClick={() => setShowFinder((s) => !s)}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40 text-gray-700 text-sm font-bold transition-all cursor-pointer"
-            >
-              🔍 Cari halaman login outlet saya (PIN Cepat)
-            </button>
-
-            <AnimatePresence initial={false}>
-              {showFinder && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="overflow-hidden"
-                >
-                  <TenantFinder theme="light" />
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <p className="text-center text-[11px] text-gray-400 pt-2">
+            {/* Platform Admin Note below card */}
+            <div className="text-center text-xs text-slate-500 mt-6">
               Pengelola platform?{" "}
-              <Link href="/admin-login" className="font-bold text-gray-600 hover:text-indigo-600 transition-colors">
-                Masuk Admin Platform
+              <Link href="/admin-login" className="font-bold text-slate-700 hover:text-indigo-600 hover:underline transition-colors">
+                Masuk Admin Platform &rarr;
               </Link>
-            </p>
+            </div>
+
           </div>
 
         </div>
-
-        {/* Footer for Mobile view */}
-        <div className="lg:hidden text-center text-gray-400 text-[11px] font-medium pt-8 mt-auto">
-          Pesanin F&B Platform &copy; 2026.
-        </div>
-
       </div>
+
+      {/* ── Modal Cari Outlet (Popup Dialog seperti Facebook Dialog) ── */}
+      <AnimatePresence>
+        {showFinderModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowFinderModal(false)}
+              className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 12 }}
+              className="relative bg-white rounded-3xl shadow-2xl border border-slate-100 max-w-lg w-full p-6 sm:p-7 z-10 space-y-4"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <div>
+                  <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">Cari Outlet Restoran</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Pilih outlet Anda untuk login via PIN Cepat atau Kiosk</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowFinderModal(false)}
+                  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-700 transition-colors cursor-pointer text-xs font-bold"
+                  aria-label="Tutup dialog"
+                >
+                  <CloseOutlined />
+                </button>
+              </div>
+
+              <TenantFinder theme="light" />
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Simple Minimal Footer ── */}
+      <footer className="py-6 px-4 text-center text-xs text-slate-400 border-t border-slate-200/50 bg-white/40">
+        Pesanin F&amp;B Platform &copy; 2026. All rights reserved.
+      </footer>
 
     </div>
   );
