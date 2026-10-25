@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { Table, Tag, DatePicker, Button, Tabs, Modal, Spin } from "antd";
+import { Table, Tag, DatePicker, Button, Tabs, Modal, Spin, Input, message } from "antd";
 import dayjs, { Dayjs } from "dayjs";
 import { getTenantBySlug } from "@/services/tenantService";
-import { getOrdersForAnalytics, getOrderById } from "@/services/orderService";
-import type { Tenant, Order } from "@/types";
+import { getOrdersForAnalytics, getOrderById, voidOrder, autoCancelStalePendingOrders } from "@/services/orderService";
+import { getCurrentProfile } from "@/services/authService";
+import type { Tenant, Order, Profile } from "@/types";
 
 const { RangePicker } = DatePicker;
 
@@ -117,17 +118,24 @@ function DonutChart({ slices }: { slices: { label: string; value: number; color:
 // ──────────── Page ────────────
 export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slug: string }> }) {
   const [tenant, setTenant] = useState<Tenant | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().subtract(6, "day"), dayjs()]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // Void modal state
+  const [voidModal, setVoidModal] = useState<{ open: boolean; order: Order | null }>({ open: false, order: null });
+  const [voidReason, setVoidReason] = useState("");
+  const [voidLoading, setVoidLoading] = useState(false);
+
   useEffect(() => {
     async function init() {
       const { tenant_slug } = await params;
-      const t = await getTenantBySlug(tenant_slug);
+      const [t, p] = await Promise.all([getTenantBySlug(tenant_slug), getCurrentProfile()]);
       if (t) setTenant(t);
+      if (p) setProfile(p);
     }
     init();
   }, [params]);
@@ -135,6 +143,8 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
   const fetchData = useCallback(async () => {
     if (!tenant) return;
     setLoading(true);
+    // Jalankan auto-cleanup pending kadaluarsa jika ada
+    await autoCancelStalePendingOrders(tenant.id).catch(console.error);
     const data = await getOrdersForAnalytics(tenant.id, startOf(range[0]), endOf(range[1]));
     setOrders(data);
     setLoading(false);
@@ -153,10 +163,40 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
   }, []);
 
   // ── KPIs ──
+  const pendingOrders = useMemo(() => orders.filter((o) => o.order_status === "pending"), [orders]);
   const completed = useMemo(() => orders.filter((o) => o.order_status === "completed"), [orders]);
   const cancelled = useMemo(() => orders.filter((o) => o.order_status === "cancelled"), [orders]);
   const revenue = useMemo(() => completed.reduce((s, o) => s + (o.total_amount ?? 0), 0), [completed]);
   const avgOrder = completed.length ? Math.round(revenue / completed.length) : 0;
+
+  const handleVoidSubmit = async () => {
+    if (!voidModal.order) return;
+    const trimmedReason = voidReason.trim();
+    if (!trimmedReason) {
+      message.warning("Harap isi alasan pembatalan.");
+      return;
+    }
+    setVoidLoading(true);
+    try {
+      const ok = await voidOrder(voidModal.order.id, trimmedReason, profile?.id ?? null);
+      if (ok) {
+        message.success(`Pesanan #${voidModal.order.queue_number} berhasil dibatalkan.`);
+        setVoidModal({ open: false, order: null });
+        setVoidReason("");
+        if (selectedOrder?.id === voidModal.order.id) {
+          setSelectedOrder(null);
+        }
+        await fetchData();
+      } else {
+        message.error("Gagal membatalkan pesanan. Silakan coba lagi.");
+      }
+    } catch (err) {
+      console.error("Error voiding order:", err);
+      message.error("Terjadi kesalahan saat membatalkan pesanan.");
+    } finally {
+      setVoidLoading(false);
+    }
+  };
 
   // ── Daily chart data ──
   const dailyData = useMemo(() => {
@@ -222,15 +262,28 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
       ),
     },
     {
-      title: "",
-      width: 80,
+      title: "Aksi",
+      width: 140,
       render: (_: unknown, r: Order) => (
-        <button
-          onClick={() => openDetail(r)}
-          className="text-xs font-semibold px-2 py-1 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors"
-        >
-          Detail
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => openDetail(r)}
+            className="text-xs font-semibold px-2 py-1 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-colors cursor-pointer"
+          >
+            Detail
+          </button>
+          {(r.order_status === "pending" || r.order_status === "cooking" || r.order_status === "ready") && (
+            <button
+              onClick={() => {
+                setVoidModal({ open: true, order: r });
+                setVoidReason("Dibatalkan dari riwayat analitik");
+              }}
+              className="text-xs font-semibold px-2 py-1 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors cursor-pointer"
+            >
+              Void
+            </button>
+          )}
+        </div>
       ),
     },
   ];
@@ -323,17 +376,22 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
             items={[
               {
                 key: "all",
-                label: "Semua",
+                label: `Semua (${orders.length})`,
                 children: <Table dataSource={orders} columns={columns} rowKey="id" size="small" scroll={{ x: 600 }} pagination={{ pageSize: 20 }} />,
               },
               {
+                key: "pending",
+                label: `Menunggu / Pending (${pendingOrders.length})`,
+                children: <Table dataSource={pendingOrders} columns={columns} rowKey="id" size="small" scroll={{ x: 600 }} pagination={{ pageSize: 20 }} />,
+              },
+              {
                 key: "completed",
-                label: "Selesai",
+                label: `Selesai (${completed.length})`,
                 children: <Table dataSource={completed} columns={columns} rowKey="id" size="small" scroll={{ x: 600 }} pagination={{ pageSize: 20 }} />,
               },
               {
                 key: "cancelled",
-                label: "Dibatalkan / Void",
+                label: `Dibatalkan / Void (${cancelled.length})`,
                 children: <Table dataSource={cancelled} columns={columns} rowKey="id" size="small" scroll={{ x: 600 }} pagination={{ pageSize: 20 }} />,
               },
             ]}
@@ -420,8 +478,52 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
                 🗒️ {selectedOrder.customer_notes}
               </div>
             )}
+
+            {/* Void button inside modal */}
+            {(selectedOrder.order_status === "pending" || selectedOrder.order_status === "cooking" || selectedOrder.order_status === "ready") && (
+              <div className="pt-2 border-t flex justify-end">
+                <Button
+                  danger
+                  onClick={() => {
+                    setVoidModal({ open: true, order: selectedOrder });
+                    setVoidReason("Dibatalkan dari detail riwayat analitik");
+                  }}
+                >
+                  Batalkan Pesanan (Void)
+                </Button>
+              </div>
+            )}
           </div>
         ) : null}
+      </Modal>
+
+      {/* ── Void / Cancel Confirmation Modal ── */}
+      <Modal
+        open={voidModal.open}
+        title="Konfirmasi Batalkan Pesanan (Void)"
+        onCancel={() => {
+          if (!voidLoading) setVoidModal({ open: false, order: null });
+        }}
+        onOk={handleVoidSubmit}
+        confirmLoading={voidLoading}
+        okText="Ya, Batalkan Pesanan"
+        okButtonProps={{ danger: true }}
+        cancelText="Tutup"
+      >
+        <div className="space-y-3 py-2">
+          <p className="text-sm text-gray-600">
+            Pesanan <span className="font-bold">#{voidModal.order?.queue_number}</span> (Total: <span className="font-semibold text-gray-800">{fmt(voidModal.order?.total_amount ?? 0)}</span>) akan dibatalkan secara permanen. Stok produk akan dikembalikan secara otomatis.
+          </p>
+          <div>
+            <label className="text-xs font-semibold text-gray-500 mb-1 block">Alasan Pembatalan:</label>
+            <Input.TextArea
+              rows={3}
+              placeholder="Masukkan alasan pembatalan (wajib)..."
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+            />
+          </div>
+        </div>
       </Modal>
     </div>
   );

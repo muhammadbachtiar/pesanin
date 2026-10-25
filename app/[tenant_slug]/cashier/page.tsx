@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { motion } from "framer-motion";
 import { Table, Tag, Button, Modal, Form, Input, Select, Badge, Tabs, Switch, InputNumber, Drawer, Space } from "antd";
-import { getOrdersByTenant, getOrderById, markOrderPaid, markOrderServed, approveOrder, voidOrder, updateOrderStatus, createOrder, generateQueueNumber, parseCustomerNotes, buildCustomerNotes, updateOrderCookedItems, getActiveOrderByTable } from "@/services/orderService";
+import { getOrdersByTenant, getOrderById, markOrderPaid, markOrderServed, approveOrder, voidOrder, updateOrderStatus, createOrder, generateQueueNumber, parseCustomerNotes, buildCustomerNotes, updateOrderCookedItems, getActiveOrderByTable, autoCancelStalePendingOrders } from "@/services/orderService";
 import { getTenantBySlug } from "@/services/tenantService";
 import { message } from "antd";
 import { getAllProductsByTenant, getCategoriesWithProducts } from "@/services/productService";
@@ -107,6 +107,9 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     const startOfYesterday = new Date();
     startOfYesterday.setDate(startOfYesterday.getDate() - 1);
     startOfYesterday.setHours(0, 0, 0, 0);
+
+    // Bersihkan otomatis pesanan pending kadaluarsa dari sebelum hari ini
+    autoCancelStalePendingOrders(tenantId).catch(console.error);
 
     const [activeOrders, todayDoneOrders] = await Promise.all([
       getOrdersByTenant(tenantId, ["pending", "cooking", "ready"], startOfYesterday.toISOString()),
@@ -2174,15 +2177,9 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           {/* ⚡ Header Bar Minimal & Clean ⚡ */}
           <div className="px-4 sm:px-6 py-2.5 bg-white border-b shadow-2xs flex items-center justify-between gap-3 flex-shrink-0 z-20">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div
-                className="w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm text-white flex-shrink-0 shadow-xs"
-                style={{ background: "var(--tenant-primary)" }}
-              >
-                ⚡
-              </div>
               <div className="flex items-center gap-2 min-w-0">
                 <h2 className="text-sm sm:text-base font-extrabold text-gray-900 leading-none truncate">
-                  Kasir POS
+                  Kasir
                 </h2>
                 {tenant && (
                   <span className="text-xs text-gray-400 font-medium truncate hidden sm:inline">

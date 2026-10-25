@@ -261,7 +261,7 @@ export async function approveOrder(
 export async function voidOrder(
     orderId: string,
     reason: string,
-    cashierProfileId: string
+    cashierProfileId?: string | null
 ): Promise<boolean> {
     // ── AUTO-RESTORE STOCK (Fase 1 / Opsi 1A) ────────────────────────────
     // Ambil order_items sebelum di-cancel, kembalikan stok ke masing-masing produk.
@@ -300,11 +300,13 @@ export async function voidOrder(
     }
     // ── END AUTO-RESTORE ─────────────────────────────────────────────────
 
+    const isValidUuid = cashierProfileId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cashierProfileId);
+
     const { error } = await supabase.from("orders").update({
         order_status: "cancelled",
         verification_status: "rejected",
         void_reason: reason,
-        voided_by: cashierProfileId,
+        voided_by: isValidUuid ? cashierProfileId : null,
         voided_at: new Date().toISOString(),
     }).eq("id", orderId);
     return !error;
@@ -369,15 +371,52 @@ export async function getActiveOrderByTable(
     const trimmedTable = tableNumber.trim();
     if (!trimmedTable) return null;
 
+    // Batasi pengecekan meja hanya untuk pesanan aktif HARI INI (mulai 00:00:00)
+    // agar pesanan gantung/pending dari hari sebelumnya tidak mengunci meja hari ini.
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
     const { data, error } = await supabase
         .from("orders")
-        .select("id, queue_number, table_number, order_status")
+        .select("id, queue_number, table_number, order_status, created_at")
         .eq("tenant_id", tenantId)
         .ilike("table_number", trimmedTable)
         .in("order_status", ["pending", "cooking", "ready"])
+        .gte("created_at", startOfToday.toISOString())
+        .order("created_at", { ascending: false })
         .limit(1);
 
     if (error || !data || data.length === 0) return null;
     return data[0] as Order;
 }
+
+/**
+ * Membersihkan pesanan pending gantung dari hari-hari sebelumnya secara otomatis.
+ * Mengubah status menjadi 'cancelled' (void) dan mengembalikan stok produk jika ada.
+ */
+export async function autoCancelStalePendingOrders(tenantId: string): Promise<number> {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const { data: staleOrders, error } = await supabase
+        .from("orders")
+        .select("id, queue_number")
+        .eq("tenant_id", tenantId)
+        .eq("order_status", "pending")
+        .lt("created_at", startOfToday.toISOString());
+
+    if (error || !staleOrders || staleOrders.length === 0) return 0;
+
+    let count = 0;
+    for (const ord of staleOrders) {
+        const ok = await voidOrder(
+            ord.id,
+            "Dibatalkan otomatis: Melewati batas hari operasional (Kadaluarsa)",
+            null
+        );
+        if (ok) count++;
+    }
+    return count;
+}
+
 
