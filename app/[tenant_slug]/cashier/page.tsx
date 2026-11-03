@@ -48,6 +48,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [pendingBadge, setPendingBadge] = useState(0);
   const [orderType, setOrderType] = useState<"dine_in" | "takeaway">("dine_in");
   const [tableNumber, setTableNumber] = useState("");
+  const tableInputRef = useRef<HTMLInputElement>(null);
   const [customerNotes, setCustomerNotes] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [productSearch, setProductSearch] = useState("");
@@ -597,7 +598,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
     if (isTableMode) {
       if (!cleanTableNum) {
-        message.error("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+        message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+        tableInputRef.current?.focus();
         return;
       }
 
@@ -612,6 +614,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         message.error(
           `Meja "${cleanTableNum}" sedang terisi oleh Pesanan #${activeExisting.queue_number} (${activeExisting.order_status.toUpperCase()}) yang belum selesai!`
         );
+        tableInputRef.current?.focus();
         return;
       }
     }
@@ -731,7 +734,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
     if (isTableMode) {
       if (!cleanTableNum) {
-        message.error("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+        message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+        tableInputRef.current?.focus();
         return;
       }
 
@@ -746,6 +750,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         message.error(
           `Meja "${cleanTableNum}" sedang terisi oleh Pesanan #${activeExisting.queue_number} (${activeExisting.order_status.toUpperCase()}) yang belum selesai!`
         );
+        tableInputRef.current?.focus();
         return;
       }
     }
@@ -811,6 +816,40 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     } else {
       await handleSavePendingOrder();
     }
+  };
+
+  const handleProceedToPayment = async () => {
+    if (cart.length === 0) return;
+
+    const isTableMode = tenant?.business_logic?.numbering === "table" && orderType !== "takeaway";
+    const cleanTableNum = tableNumber.trim();
+
+    if (isTableMode) {
+      if (!cleanTableNum) {
+        message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+        tableInputRef.current?.focus();
+        return;
+      }
+
+      // Validasi apakah meja sedang terisi pesanan aktif yang belum selesai
+      const activeExisting =
+        orders.find(
+          (o) =>
+            ["pending", "cooking", "ready"].includes(o.order_status) &&
+            o.table_number?.trim().toLowerCase() === cleanTableNum.toLowerCase()
+        ) || (tenant ? await getActiveOrderByTable(tenant.id, cleanTableNum) : null);
+
+      if (activeExisting) {
+        message.error(
+          `Meja "${cleanTableNum}" sedang terisi oleh Pesanan #${activeExisting.queue_number} (${activeExisting.order_status.toUpperCase()}) yang belum selesai!`
+        );
+        tableInputRef.current?.focus();
+        return;
+      }
+    }
+
+    setRightPanelTab("payment");
+    if (posCashReceived === null) setPosCashReceived(cartTotal);
   };
 
   const toggleItemCompleteCashier = useCallback(
@@ -2399,8 +2438,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     type="button"
                     onClick={() => {
                       if (cart.length > 0) {
-                        setRightPanelTab("payment");
-                        if (posCashReceived === null) setPosCashReceived(cartTotal);
+                        handleProceedToPayment();
                       }
                     }}
                     disabled={cart.length === 0}
@@ -2428,10 +2466,6 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   </span>
                 </div>
               </div>
-
-              {/* ─────────────────────────────────────────────────────────────
-                  MODE 1: DAFTAR PESANAN (LEGA, TINGGI PENUH, NYAMAN KASIR)
-                 ───────────────────────────────────────────────────────────── */}
               {rightPanelTab === "items" && (
                 <div className="flex-1 flex flex-col min-h-0 bg-white">
                   {/* Order Settings Section */}
@@ -2479,12 +2513,22 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                         />
                       </div>
 
-                      {bl?.numbering === "table" && orderType !== "takeaway" ? (
+                      {orderType === "takeaway" ? (
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">
+                            📦 Detail
+                          </label>
+                          <div className="text-xs font-bold text-orange-600 bg-orange-50 border border-orange-200 px-2 py-1.5 rounded-lg text-center truncate">
+                            Bawa Pulang
+                          </div>
+                        </div>
+                      ) : bl?.numbering === "table" ? (
                         <div>
                           <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">
                             🪑 No. Meja <span className="text-rose-500">*</span>
                           </label>
                           <input
+                            ref={tableInputRef}
                             value={tableNumber}
                             onChange={(e) => setTableNumber(e.target.value)}
                             placeholder="Contoh: 05..."
@@ -2494,10 +2538,10 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                       ) : (
                         <div>
                           <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-0.5">
-                            📦 Detail
+                            🍽️ Detail
                           </label>
-                          <div className="text-xs font-bold text-orange-600 bg-orange-50 border border-orange-200 px-2 py-1.5 rounded-lg text-center">
-                            Bawa Pulang
+                          <div className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1.5 rounded-lg text-center truncate">
+                            Makan di Tempat
                           </div>
                         </div>
                       )}
@@ -2630,10 +2674,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                         )}
                         <button
                           type="button"
-                          onClick={() => {
-                            setRightPanelTab("payment");
-                            if (posCashReceived === null) setPosCashReceived(cartTotal);
-                          }}
+                          onClick={handleProceedToPayment}
                           className="flex-1 py-2.5 px-4 rounded-xl font-bold text-white text-xs sm:text-sm transition-all shadow-md flex items-center justify-center gap-2 active:scale-[0.99] cursor-pointer"
                           style={{ background: "var(--tenant-primary)" }}
                         >
