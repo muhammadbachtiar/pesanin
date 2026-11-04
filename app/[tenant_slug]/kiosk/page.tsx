@@ -199,6 +199,11 @@ export default function KioskPage({
         setScreen("table_input");
         return;
       }
+      if (!tableRecord && !/^\d+$/.test(targetTableNum)) {
+        alert("Nomor Meja harus berupa angka! (Contoh: 05)");
+        setScreen("table_input");
+        return;
+      }
       const activeExisting = await getActiveOrderByTable(tenant.id, targetTableNum);
       if (activeExisting) {
         alert(`⚠️ Meja "${targetTableNum}" sedang terisi oleh pesanan aktif yang belum selesai. Harap gunakan nomor meja lain!`);
@@ -686,15 +691,18 @@ export default function KioskPage({
                     </div>
                     <input
                       type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       value={tableRecord?.display_name ?? tableRecord?.table_number ?? tableInputValue}
                       onChange={(e) => {
                         if (!tableRecord) {
-                          setTableInputValue(e.target.value);
+                          const numericOnly = e.target.value.replace(/\D/g, "");
+                          setTableInputValue(numericOnly);
                           setTableInputError(null);
                         }
                       }}
                       disabled={!!tableRecord}
-                      placeholder="Misal: 05 atau Meja 12"
+                      placeholder="Contoh: 05"
                       className="w-full text-lg font-black px-4 py-3.5 border-2 border-gray-200 rounded-xl bg-gray-50/60 outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all text-gray-900 disabled:opacity-75 disabled:bg-gray-100"
                     />
                     <p className="text-[11px] text-gray-400 font-semibold flex items-center gap-1">
@@ -756,6 +764,10 @@ export default function KioskPage({
                     if (isTableRequired) {
                       if (!targetTableNum) {
                         setTableInputError("Nomor mejamu belum diisi nih! Isi dulu yuk 😉");
+                        return;
+                      }
+                      if (!tableRecord && !/^\d+$/.test(targetTableNum)) {
+                        setTableInputError("Nomor meja hanya boleh berupa angka! (Contoh: 05) 🪑");
                         return;
                       }
                       if (tenant && !tableRecord) {

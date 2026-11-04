@@ -603,6 +603,12 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         return;
       }
 
+      if (!/^\d+$/.test(cleanTableNum)) {
+        message.warning("Nomor Meja harus berupa angka! (Contoh: 05)");
+        tableInputRef.current?.focus();
+        return;
+      }
+
       const activeExisting =
         orders.find(
           (o) =>
@@ -739,6 +745,12 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
         return;
       }
 
+      if (!/^\d+$/.test(cleanTableNum)) {
+        message.warning("Nomor Meja harus berupa angka! (Contoh: 05)");
+        tableInputRef.current?.focus();
+        return;
+      }
+
       const activeExisting =
         orders.find(
           (o) =>
@@ -827,6 +839,12 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     if (isTableMode) {
       if (!cleanTableNum) {
         message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+        tableInputRef.current?.focus();
+        return;
+      }
+
+      if (!/^\d+$/.test(cleanTableNum)) {
+        message.warning("Nomor Meja harus berupa angka! (Contoh: 05)");
         tableInputRef.current?.focus();
         return;
       }
@@ -2529,8 +2547,14 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                           </label>
                           <input
                             ref={tableInputRef}
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
                             value={tableNumber}
-                            onChange={(e) => setTableNumber(e.target.value)}
+                            onChange={(e) => {
+                              const numericOnly = e.target.value.replace(/\D/g, "");
+                              setTableNumber(numericOnly);
+                            }}
                             placeholder="Contoh: 05..."
                             className="w-full text-xs font-semibold px-2 py-1.5 border rounded-lg bg-white outline-none focus:border-indigo-500 transition-all text-gray-900"
                           />
