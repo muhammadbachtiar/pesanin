@@ -693,6 +693,9 @@ export default function KioskPage({
                       type="text"
                       inputMode="numeric"
                       pattern="[0-9]*"
+                      autoComplete="off"
+                      enterKeyHint="done"
+                      maxLength={4}
                       value={tableRecord?.display_name ?? tableRecord?.table_number ?? tableInputValue}
                       onChange={(e) => {
                         if (!tableRecord) {

@@ -99,12 +99,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
   const drawerWidth = windowWidth < 768 ? "100%" : windowWidth < 1280 ? "88%" : "78%";
   const refreshOrders = useCallback(async (tenantId: string) => {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
-
-    // Retention Cutoff: Max H-1 (Kemarin 00:00:00 / 48 Jam) agar pesanan ghaib lampau tidak mengotori layar
+    // Retention Cutoff: Max H-1 (Kemarin 00:00:00 / 48 Jam) agar pesanan tidak terpotong
     const startOfYesterday = new Date();
     startOfYesterday.setDate(startOfYesterday.getDate() - 1);
     startOfYesterday.setHours(0, 0, 0, 0);
@@ -114,31 +109,17 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
     const [activeOrders, todayDoneOrders] = await Promise.all([
       getOrdersByTenant(tenantId, ["pending", "cooking", "ready"], startOfYesterday.toISOString()),
-      getOrdersByTenant(tenantId, ["completed", "cancelled"], startOfToday.toISOString(), endOfToday.toISOString()),
+      getOrdersByTenant(tenantId, ["completed", "cancelled"], startOfYesterday.toISOString()),
     ]);
 
     const data = [...activeOrders, ...todayDoneOrders].filter(
       (o, i, arr) => arr.findIndex((x) => x.id === o.id) === i
     ).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-    for (const o of data) {
-      if (o.order_status === "ready" && o.payment_status === "paid") {
-        const { isServed } = parseCustomerNotes(o.customer_notes);
-        if (isServed) {
-          updateOrderStatus(o.id, "completed");
-          o.order_status = "completed";
-        }
-      }
-    }
-
     setOrders(data);
     setLastSynced(new Date());
     setPendingBadge(
-      data.filter(
-        (o) =>
-          o.order_status === "pending" &&
-          (o.payment_status === "unpaid" || o.verification_status === "unverified")
-      ).length
+      data.filter((o) => o.order_status === "pending").length
     );
   }, []);
 
@@ -310,21 +291,13 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       const full = await getOrderById(newOrder.id);
       const order = full ?? newOrder;
       setOrders((prev) => [order, ...prev.filter((o) => o.id !== order.id)]);
-      if (order.order_status === "pending" &&
-        (order.payment_status === "unpaid" || order.verification_status === "unverified")) {
+      if (order.order_status === "pending") {
         setPendingBadge((n) => n + 1);
       }
     },
     async (updated) => {
       const full = await getOrderById(updated.id);
       const order = full ?? updated;
-      if (order.order_status === "ready" && order.payment_status === "paid") {
-        const { isServed } = parseCustomerNotes(order.customer_notes);
-        if (isServed) {
-          await updateOrderStatus(order.id, "completed");
-          order.order_status = "completed";
-        }
-      }
       setOrders((prev) => prev.map((o) => (o.id === order.id ? order : o)));
       setPendingBadge((n) => {
         const wasPending = updated.order_status === "pending";
@@ -370,13 +343,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
     setSubmitting((s) => ({ ...s, pay: true }));
     try {
-      const { isServed } = parseCustomerNotes(fullOrder.customer_notes);
-      // pos_only mode: always mark completed immediately after payment (no kitchen flow)
-      const targetStatus: Order["order_status"] = (isPosOnly || payModal.autoComplete || (isServed && fullOrder.order_status === "ready"))
+      // pos_only mode or explicit autoComplete: mark completed immediately after payment
+      // For all other cases, preserve the order's active status (pending -> pending, cooking -> cooking, ready -> ready)
+      const targetStatus: Order["order_status"] = (isPosOnly || payModal.autoComplete)
         ? "completed"
-        : fullOrder.order_status === "pending"
-          ? "cooking"
-          : fullOrder.order_status;
+        : fullOrder.order_status;
 
       setPrintReceiptData({
         order: fullOrder,
@@ -430,9 +401,6 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     setSubmitting((s) => ({ ...s, [`serve_${order.id}`]: true }));
     try {
       await markOrderServed(order.id, order.customer_notes);
-      if (order.payment_status === "paid") {
-        await updateOrderStatus(order.id, "completed");
-      }
       if (tenant) refreshOrders(tenant.id);
     } finally {
       setSubmitting((s) => ({ ...s, [`serve_${order.id}`]: false }));
@@ -958,8 +926,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
   const bl = tenant?.business_logic;
   const isPosOnly = bl?.pos_only === true;
-  // pos_only: always prepaid, hide pending tab since every order is immediately completed
-  const showPendingTab = !isPosOnly && (bl?.payment_timing === "postpaid" || bl?.payment_mode === "manual");
+  // Tab Menunggu ditampilkan untuk seluruh mode kafe / resto normal (non-POS Only)
+  const showPendingTab = !isPosOnly;
 
   const columns = [
     {
@@ -1158,23 +1126,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 {/* TAB MENUNGGU (pending) */}
                 {r.order_status === "pending" && (
                   <>
-                    {bl?.payment_timing === "postpaid" &&
-                      bl.require_cashier_verification &&
-                      r.verification_status === "unverified" && (
-                        <Button
-                          size="small"
-                          loading={submitting[`approve_${r.id}`]}
-                          style={{ background: "#22c55e", color: "#fff", border: "none" }}
-                          onClick={() =>
-                            Modal.confirm({
-                              title: "Terima pesanan ini? Pesanan akan diteruskan ke dapur",
-                              onOk: () => handleApprove(r.id),
-                            })
-                          }
-                        >
-                          Terima
-                        </Button>
-                      )}
+                    {/* Jika belum lunas, muncul tombol Tandai Lunas */}
                     {isUnpaid && (
                       <Button
                         type="primary"
@@ -1188,6 +1140,22 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                         Tandai Lunas
                       </Button>
                     )}
+
+                    {/* Tombol Terima / Proses ke Dapur: pesanan yang sudah dibayar (atau belum jika diperbolehkan) dapat diteruskan ke dapur */}
+                    <Button
+                      size="small"
+                      loading={submitting[`approve_${r.id}`]}
+                      style={{ background: "#22c55e", color: "#fff", border: "none" }}
+                      onClick={() =>
+                        Modal.confirm({
+                          title: "Proses pesanan ini ke dapur?",
+                          content: `Pesanan #${r.queue_number} akan dipindahkan ke antrian dapur (Sedang Dimasak).`,
+                          onOk: () => handleApprove(r.id),
+                        })
+                      }
+                    >
+                      👨‍🍳 Proses ke Dapur
+                    </Button>
                   </>
                 )}
 
@@ -1313,28 +1281,17 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   ];
 
   const isOrderEffectivelyCompleted = useCallback((o: Order) => {
-    if (o.order_status === "completed") return true;
-    if (o.order_status === "ready") {
-      const { isServed } = parseCustomerNotes(o.customer_notes);
-      const isDineIn = o.order_type !== "takeaway";
-      const isPaid = o.payment_status === "paid";
-      if (isDineIn && isServed && isPaid) {
-        return true;
-      }
-    }
-    return false;
+    return o.order_status === "completed";
   }, []);
 
   const filterOrders = useCallback(
     (statuses: Order["order_status"][], payStatuses?: Order["payment_status"][]) =>
       orders.filter((o) => {
         if (statuses.includes("completed")) {
-          if (o.order_status === "cancelled") return true;
-          if (isOrderEffectivelyCompleted(o)) return true;
+          if (o.order_status === "cancelled" || o.order_status === "completed") return true;
           return false;
         }
         if (statuses.includes("ready")) {
-          if (isOrderEffectivelyCompleted(o)) return false;
           if (o.order_status !== "ready") return false;
           return payStatuses ? payStatuses.includes(o.payment_status) : true;
         }
@@ -1343,7 +1300,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           (payStatuses ? payStatuses.includes(o.payment_status) : true)
         );
       }),
-    [orders, isOrderEffectivelyCompleted]
+    [orders]
   );
 
   if (!tenant) return <div className="p-8 text-gray-400">Loading...</div>;
@@ -1352,7 +1309,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     (o) =>
       o.payment_status === "unpaid" &&
       o.order_status !== "cancelled" &&
-      !isOrderEffectivelyCompleted(o)
+      o.order_status !== "completed"
   );
 
   return (
@@ -2550,6 +2507,9 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                             type="text"
                             inputMode="numeric"
                             pattern="[0-9]*"
+                            autoComplete="off"
+                            enterKeyHint="done"
+                            maxLength={4}
                             value={tableNumber}
                             onChange={(e) => {
                               const numericOnly = e.target.value.replace(/\D/g, "");
