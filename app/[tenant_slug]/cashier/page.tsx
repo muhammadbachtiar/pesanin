@@ -54,6 +54,52 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   const [productSearch, setProductSearch] = useState("");
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [posMobileTab, setPosMobileTab] = useState<"menu" | "cart">("menu");
+  // Resizable split pane & collapsible payment panel state
+  const [rightPanelWidth, setRightPanelWidth] = useState(42); // Persentase lebar panel pembayaran (default 42%)
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true); // Toggle buka/tutup tab pembayaran
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+
+  const startDraggingSplit = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    const container = splitContainerRef.current;
+    if (!container) return;
+
+    const onMove = (clientX: number) => {
+      const rect = container.getBoundingClientRect();
+      const currentRightWidth = rect.right - clientX;
+      const percent = (currentRightWidth / rect.width) * 100;
+      // Batasi min 28% dan max 65% untuk panel kanan (sehingga panel menu kiri minimal 35%)
+      const clamped = Math.min(65, Math.max(28, percent));
+      setRightPanelWidth(clamped);
+    };
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      ev.preventDefault();
+      onMove(ev.clientX);
+    };
+
+    const handleTouchMove = (ev: TouchEvent) => {
+      if (ev.touches[0]) {
+        onMove(ev.touches[0].clientX);
+      }
+    };
+
+    const handleEnd = () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleEnd);
+      document.removeEventListener("touchmove", handleTouchMove);
+      document.removeEventListener("touchend", handleEnd);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleEnd);
+    document.addEventListener("touchmove", handleTouchMove, { passive: false });
+    document.addEventListener("touchend", handleEnd);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, []);
 
   // ── Fase 3: Thermal Printer Integration (Dual Mode: Browser + Web Bluetooth) ──
   const btPrinter = useBluetoothPrinter();
@@ -916,13 +962,74 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
     [startCountdownAction, tenant, refreshOrders]
   );
 
-  // ──────────────────────────── Filtered product list ───────────────────────────────
-  // Menu yang habis TIDAK di-filter keluar, melainkan tetap ditampilkan dalam keadaan buram/disabled oleh ProductCard
-  const visibleProducts = products.filter((p) => {
-    const matchCat = selectedCat ? p.category_id === selectedCat : true;
-    const matchQ = p.name.toLowerCase().includes(productSearch.toLowerCase());
-    return matchCat && matchQ;
-  });
+  // ──────────────────────────── Filtered product list & categories ───────────────────────────────
+  const normalizedSearch = productSearch.trim().toLowerCase();
+
+  // Tab Kategori yang ikut terfilter saat melakukan pencarian:
+  // Kategori ditampilkan jika namanya cocok DENGAN kata kunci ATAU memiliki produk yang cocok
+  const filteredCategories = useMemo(() => {
+    if (!normalizedSearch) return categories;
+    return categories.filter((cat) => {
+      const catNameMatches = cat.name.toLowerCase().includes(normalizedSearch);
+      const hasMatchingProducts = products.some(
+        (p) =>
+          p.category_id === cat.id &&
+          (p.name.toLowerCase().includes(normalizedSearch) ||
+            (p.description && p.description.toLowerCase().includes(normalizedSearch)))
+      );
+      return catNameMatches || hasMatchingProducts;
+    });
+  }, [categories, products, normalizedSearch]);
+
+  // Jumlah menu per kategori yang sesuai dengan hasil pencarian
+  const matchingProductsByCat = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const cat of categories) {
+      counts[cat.id] = products.filter((p) => {
+        if (p.category_id !== cat.id) return false;
+        if (!normalizedSearch) return true;
+        const pCat = categories.find((c) => c.id === p.category_id);
+        const matchName = p.name.toLowerCase().includes(normalizedSearch);
+        const matchDesc = p.description ? p.description.toLowerCase().includes(normalizedSearch) : false;
+        const matchCatName = pCat ? pCat.name.toLowerCase().includes(normalizedSearch) : false;
+        return matchName || matchDesc || matchCatName;
+      }).length;
+    }
+    return counts;
+  }, [categories, products, normalizedSearch]);
+
+  // Total produk yang cocok dengan pencarian
+  const matchingAllCount = useMemo(() => {
+    if (!normalizedSearch) return products.length;
+    return products.filter((p) => {
+      const pCat = categories.find((c) => c.id === p.category_id);
+      const matchName = p.name.toLowerCase().includes(normalizedSearch);
+      const matchDesc = p.description ? p.description.toLowerCase().includes(normalizedSearch) : false;
+      const matchCatName = pCat ? pCat.name.toLowerCase().includes(normalizedSearch) : false;
+      return matchName || matchDesc || matchCatName;
+    }).length;
+  }, [categories, products, normalizedSearch]);
+
+  // Menu yang ditampilkan (tetap menampilkan menu habis dalam kondisi disabled)
+  const visibleProducts = useMemo(() => {
+    return products.filter((p) => {
+      // 1. Filter kata kunci pencarian (mencari nama produk, deskripsi, dan nama kategori)
+      if (normalizedSearch) {
+        const pCat = categories.find((c) => c.id === p.category_id);
+        const matchName = p.name.toLowerCase().includes(normalizedSearch);
+        const matchDesc = p.description ? p.description.toLowerCase().includes(normalizedSearch) : false;
+        const matchCatName = pCat ? pCat.name.toLowerCase().includes(normalizedSearch) : false;
+        if (!matchName && !matchDesc && !matchCatName) return false;
+      }
+
+      // 2. Filter kategori aktif jika user memilih salah satu tab kategori
+      if (selectedCat) {
+        return p.category_id === selectedCat;
+      }
+
+      return true;
+    });
+  }, [products, categories, selectedCat, normalizedSearch]);
 
   const bl = tenant?.business_logic;
   const isPosOnly = bl?.pos_only === true;
@@ -1871,20 +1978,29 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   <span className="text-[11px] text-amber-700 font-medium">Input atau Pilih Uang Pas</span>
                 </div>
 
-                <Space.Compact className="w-full" size="large">
-                  <span className="inline-flex items-center px-3 border border-r-0 border-gray-300 bg-gray-50 rounded-l-lg font-bold text-gray-600 text-sm">
+                <div className="relative flex items-center">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 font-black text-sm select-none pointer-events-none">
                     Rp
                   </span>
-                  <InputNumber
-                    className="w-full text-lg font-bold"
-                    size="large"
-                    value={cashReceived}
-                    onChange={(v) => setCashReceived(v)}
-                    formatter={(val) => `${val}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
-                    parser={(val) => Number(val?.replace(/\./g, "") || 0)}
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    autoComplete="off"
                     placeholder="Masukkan nominal bayar..."
+                    value={cashReceived !== null && cashReceived !== undefined ? cashReceived.toLocaleString("id-ID") : ""}
+                    onChange={(e) => {
+                      const numericStr = e.target.value.replace(/\D/g, "");
+                      setCashReceived(numericStr ? parseInt(numericStr, 10) : null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (!/[0-9]|Backspace|Delete|ArrowLeft|ArrowRight|Tab|Enter/.test(e.key)) {
+                        e.preventDefault();
+                      }
+                    }}
+                    className="w-full text-lg font-black pl-11 pr-4 py-2.5 border-2 border-gray-300 rounded-xl bg-white outline-none focus:border-amber-500 focus:ring-4 focus:ring-amber-500/15 transition-all text-gray-900"
                   />
-                </Space.Compact>
+                </div>
 
                 {/* Smart Adaptive Quick Cash Denominations */}
                 {payModal.order && (() => {
@@ -2167,7 +2283,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 <Drawer
         title={null}
         placement="bottom"
-        height="100vh"
+        size="100vh"
         open={newOrderDrawer}
         onClose={() => {
           setNewOrderDrawer(false);
@@ -2229,6 +2345,21 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
             {/* Header Right Actions */}
             <div className="flex items-center gap-2">
+              {!isRightPanelOpen && (
+                <button
+                  type="button"
+                  onClick={() => setIsRightPanelOpen(true)}
+                  className="hidden md:inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-white font-extrabold text-xs shadow-md hover:opacity-95 active:scale-95 transition-all cursor-pointer"
+                  style={{ background: "var(--tenant-primary)" }}
+                  title="Buka Tab Pembayaran & Daftar Pesanan"
+                >
+                  <span>⇤</span>
+                  <span>Buka Tab Pembayaran</span>
+                  <span className="bg-white/25 px-2 py-0.5 rounded-full text-[11px]">
+                    {cart.reduce((s, c) => s + c.quantity, 0)} Item
+                  </span>
+                </button>
+              )}
               {cart.length > 0 && (
                 <button
                   type="button"
@@ -2263,11 +2394,14 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           </div>
 
           {/* ⚡ Main Split Area ⚡ */}
-          <div className="flex-1 flex flex-col md:flex-row min-h-0 relative overflow-hidden">
+          <div ref={splitContainerRef} className="flex-1 flex flex-col md:flex-row min-h-0 relative overflow-hidden">
 
             {/* 🍽️ LEFT: Product Catalog Panel (Menu) 🍽️ */}
             <div
-              className={`flex-col md:flex md:w-[54%] lg:w-[56%] xl:w-[58%] min-w-0 border-r bg-gray-50/70 h-full ${posMobileTab === "menu" ? "flex flex-1" : "hidden md:flex"
+              style={{
+                width: isRightPanelOpen && windowWidth >= 768 ? `${100 - rightPanelWidth}%` : "100%",
+              }}
+              className={`flex-col min-w-[300px] bg-gray-50/70 h-full relative ${posMobileTab === "menu" ? "flex flex-1 md:flex-none" : "hidden md:flex"
                 }`}
             >
               {/* Search & Category Filter Header */}
@@ -2280,20 +2414,21 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   <input
                     value={productSearch}
                     onChange={(e) => setProductSearch(e.target.value)}
-                    placeholder="Cari nama menu makanan atau minuman..."
+                    placeholder="Cari nama menu atau kategori tab..."
                     className="w-full text-sm pl-9 pr-8 py-2 border rounded-xl bg-gray-50 outline-none focus:bg-white focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 transition-all text-gray-900 placeholder-gray-400"
                   />
                   {productSearch && (
                     <button
                       onClick={() => setProductSearch("")}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 font-bold text-xs cursor-pointer"
+                      title="Hapus pencarian"
                     >
                       ✕
                     </button>
                   )}
                 </div>
 
-                {/* Category Pills Bar */}
+                {/* Category Pills Bar (ikut terfilter saat mencari menu/kategori) */}
                 {categories.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto pb-1 items-center">
                     <button
@@ -2311,15 +2446,15 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                           : { background: "#fff", color: "#64748b", borderColor: "#e2e8f0" }
                       }
                     >
-                      Semua ({products.length})
+                      Semua ({matchingAllCount})
                     </button>
-                    {categories.map((cat) => {
-                      const catCount = products.filter((p) => p.category_id === cat.id).length;
+                    {filteredCategories.map((cat) => {
+                      const catCount = matchingProductsByCat[cat.id] ?? 0;
                       return (
                         <button
                           key={cat.id}
                           type="button"
-                          onClick={() => setSelectedCat(cat.id)}
+                          onClick={() => setSelectedCat(cat.id === selectedCat ? null : cat.id)}
                           className="whitespace-nowrap text-xs font-bold px-3 py-1 rounded-full flex-shrink-0 transition-all border cursor-pointer"
                           style={
                             selectedCat === cat.id
@@ -2370,6 +2505,41 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                 })}
               </div>
 
+              {/* Floating Button untuk Buka Tab Pembayaran saat ditutup (Desktop/Tablet) */}
+              {!isRightPanelOpen && (
+                <button
+                  type="button"
+                  onClick={() => setIsRightPanelOpen(true)}
+                  className="hidden md:flex absolute right-6 bottom-6 z-30 items-center gap-3.5 px-5 py-3.5 rounded-2xl text-white shadow-2xl hover:scale-[1.03] active:scale-95 transition-all cursor-pointer border border-white/20"
+                  style={{
+                    background: "linear-gradient(135deg, var(--tenant-primary), var(--tenant-secondary, var(--tenant-primary)))",
+                  }}
+                  title="Buka Tab Pembayaran & Daftar Pesanan"
+                >
+                  <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-white/20 backdrop-blur-xs">
+                    <span className="text-xl">💳</span>
+                    {cart.length > 0 && (
+                      <span className="absolute -top-2 -right-2 min-w-[20px] h-5 px-1 bg-rose-500 text-white rounded-full text-[10px] font-black flex items-center justify-center border-2 border-white shadow-sm">
+                        {cart.reduce((s, c) => s + c.quantity, 0)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-col text-left pr-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider opacity-85">
+                      Buka Tab Pembayaran
+                    </span>
+                    <span className="text-sm font-black leading-tight">
+                      {cart.length > 0
+                        ? `${cart.reduce((s, c) => s + c.quantity, 0)} Menu · Rp ${cartTotal.toLocaleString("id-ID")}`
+                        : "Keranjang & Kasir"}
+                    </span>
+                  </div>
+                  <span className="w-7 h-7 rounded-lg bg-white/15 flex items-center justify-center text-sm font-black">
+                    ⇤
+                  </span>
+                </button>
+              )}
+
               {/* Floating Mobile Cart Bar */}
               {cart.length > 0 && (
                 <div className="p-3 bg-white border-t md:hidden flex-shrink-0 shadow-lg">
@@ -2391,9 +2561,32 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
               )}
             </div>
 
+            {/* ↔️ DRAG RESIZER DIVIDER HANDLE (Desktop/Tablet) ↔️ */}
+            {isRightPanelOpen && (
+              <div
+                onMouseDown={startDraggingSplit}
+                onTouchStart={startDraggingSplit}
+                className="hidden md:flex flex-col items-center justify-center w-3 bg-gray-200/70 hover:bg-indigo-500 active:bg-indigo-600 cursor-col-resize transition-colors z-20 select-none flex-shrink-0 group relative"
+                title="Tahan & geser kiri/kanan untuk mengatur ukuran panel"
+              >
+                <div className="flex flex-col gap-1 items-center justify-center py-2 px-0.5 rounded-full">
+                  <span className="w-1 h-1 rounded-full bg-gray-400 group-hover:bg-white transition-colors" />
+                  <span className="w-1 h-4 rounded-full bg-gray-400 group-hover:bg-white transition-colors" />
+                  <span className="w-1 h-1 rounded-full bg-gray-400 group-hover:bg-white transition-colors" />
+                </div>
+              </div>
+            )}
+
             {/* 🛒 RIGHT PANEL: 2-Mode Spacious Layout (Pesanan VS Pembayaran) 💳 */}
             <div
-              className={`flex-col md:flex md:w-[46%] lg:w-[44%] xl:w-[42%] min-w-[340px] bg-white h-full ${posMobileTab === "cart" ? "flex flex-1" : "hidden md:flex"
+              style={{
+                width: windowWidth >= 768 ? `${rightPanelWidth}%` : "100%",
+              }}
+              className={`flex-col min-w-[310px] bg-white h-full border-l border-gray-200 ${posMobileTab === "cart"
+                ? "flex flex-1 md:flex-none"
+                : isRightPanelOpen
+                  ? "hidden md:flex"
+                  : "hidden"
                 }`}
             >
               {/* Right Panel Header: Segmented Toggle (Pesanan vs Pembayaran) */}
@@ -2439,6 +2632,15 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   <span className="font-black text-xs text-gray-900 bg-white border px-2.5 py-1 rounded-lg hidden sm:inline-block">
                     Rp {cartTotal.toLocaleString("id-ID")}
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsRightPanelOpen(false)}
+                    className="hidden md:inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold text-gray-600 hover:text-rose-600 bg-white hover:bg-rose-50 border border-gray-200 hover:border-rose-200 shadow-2xs transition-all cursor-pointer"
+                    title="Tutup / Sembunyikan Tab Pembayaran"
+                  >
+                    <span>⇥</span>
+                    <span className="hidden xl:inline">Tutup</span>
+                  </button>
                 </div>
               </div>
               {rightPanelTab === "items" && (
@@ -2771,20 +2973,29 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                           <span className="text-[11px] text-amber-700 font-medium">Klik pecahan cepat</span>
                         </div>
 
-                        <Space.Compact className="w-full" size="large">
-                          <span className="inline-flex items-center px-3 border border-r-0 border-gray-300 bg-gray-50 rounded-l-lg font-bold text-gray-600 text-sm">
+                        <div className="relative flex items-center">
+                          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500 font-black text-sm select-none pointer-events-none">
                             Rp
                           </span>
-                          <InputNumber
-                            className="w-full text-lg font-black"
-                            size="large"
-                            value={posCashReceived}
-                            onChange={(v) => setPosCashReceived(v)}
-                            formatter={(val) => `${val}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
-                            parser={(val) => Number(val?.replace(/\./g, "") || 0)}
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            autoComplete="off"
                             placeholder="Nominal uang tunai..."
+                            value={posCashReceived !== null && posCashReceived !== undefined ? posCashReceived.toLocaleString("id-ID") : ""}
+                            onChange={(e) => {
+                              const numericStr = e.target.value.replace(/\D/g, "");
+                              setPosCashReceived(numericStr ? parseInt(numericStr, 10) : null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (!/[0-9]|Backspace|Delete|ArrowLeft|ArrowRight|Tab|Enter/.test(e.key)) {
+                                e.preventDefault();
+                              }
+                            }}
+                            className="w-full text-lg font-black pl-11 pr-4 py-2.5 border-2 border-gray-300 rounded-xl bg-white outline-none focus:border-amber-500 focus:ring-4 focus:ring-amber-500/15 transition-all text-gray-900"
                           />
-                        </Space.Compact>
+                        </div>
 
                         {/* Quick Cash Chips */}
                         <div className="flex flex-wrap gap-1.5">

@@ -609,12 +609,24 @@ export default function KioskPage({
                   <div className="flex flex-col sm:flex-row gap-3">
                     <div className="flex items-center gap-2">
                       <button onClick={() => updateCartItemQuantity(i, item.quantity - 1)} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-lg">-</button>
-                      <input type="number" value={item.quantity === 0 ? "" : item.quantity} onChange={(e) => updateCartItemQuantity(i, parseInt(e.target.value) || 0)} className="w-12 text-center bg-gray-50 border rounded-lg py-1.5 text-sm font-bold" />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={item.quantity === 0 ? "" : item.quantity}
+                        onChange={(e) => {
+                          const numericOnly = e.target.value.replace(/\D/g, "");
+                          updateCartItemQuantity(i, parseInt(numericOnly, 10) || 0);
+                        }}
+                        onFocus={(e) => setTimeout(() => e.target.scrollIntoView({ behavior: "smooth", block: "center" }), 200)}
+                        className="w-12 text-center bg-gray-50 border rounded-lg py-1.5 text-sm font-bold"
+                      />
                       <button onClick={() => updateCartItemQuantity(i, item.quantity + 1)} className="w-9 h-9 rounded-full text-white flex items-center justify-center font-bold text-lg" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>+</button>
                     </div>
                     <input
                       value={item.notes || ""}
                       onChange={(e) => updateCartItemNotes(i, e.target.value)}
+                      onFocus={(e) => setTimeout(() => e.target.scrollIntoView({ behavior: "smooth", block: "center" }), 200)}
                       placeholder="Tulis Opsional (Minta Pedas, dsb...)"
                       className="flex-1 text-sm p-2 bg-gray-50 border border-gray-100 rounded-xl outline-none focus:border-[var(--tenant-primary)] placeholder-gray-400"
                     />
@@ -647,21 +659,21 @@ export default function KioskPage({
         {(screen === "customer_info" || screen === "table_input") && (
           <motion.div
             key="customer_info"
-            className="fixed inset-0 flex flex-col justify-between p-6 bg-slate-50 z-40 overflow-y-auto"
+            className="fixed inset-0 flex flex-col p-4 sm:p-6 bg-slate-50 z-40 overflow-y-auto overscroll-contain"
             initial={{ opacity: 0, scale: 0.96 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.25 }}
           >
-            <div className="max-w-md w-full mx-auto space-y-6 my-auto pt-4 pb-6">
+            <div className="max-w-md landscape:max-w-2xl w-full mx-auto space-y-5 landscape:space-y-3 my-auto landscape:my-1 pt-2 pb-16 landscape:pb-8">
 
               {/* Fun Header */}
-              <div className="text-center space-y-3">
+              <div className="text-center space-y-2 landscape:space-y-0.5">
                 <div>
-                  <h2 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
+                  <h2 className="text-2xl sm:text-3xl landscape:text-lg font-black text-gray-900 tracking-tight">
                     Sedikit Lagi!
                   </h2>
-                  <p className="text-gray-500 text-sm font-medium leading-relaxed mt-1 max-w-xs mx-auto">
+                  <p className="text-gray-500 text-sm font-medium leading-relaxed mt-1 max-w-xs mx-auto landscape:hidden">
                     {orderType === "takeaway"
                       ? "Siapa nama kamu? Nanti kami panggil pas pesanannya siap!"
                       : bl.numbering === "table"
@@ -672,11 +684,11 @@ export default function KioskPage({
               </div>
 
               {/* Input Cards Container */}
-              <div className="space-y-4">
+              <div className={`space-y-4 ${bl.numbering === "table" && orderType !== "takeaway" ? "landscape:space-y-0 landscape:grid landscape:grid-cols-2 landscape:gap-3" : ""}`}>
 
                 {/* 1. Nomor Meja Field (Dine-In Table Mode) */}
                 {bl.numbering === "table" && orderType !== "takeaway" && (
-                  <div className="bg-white p-5 rounded-2xl border border-gray-200/90 shadow-sm space-y-2.5 hover:shadow-md transition-shadow">
+                  <div className="bg-white p-5 landscape:p-3.5 rounded-2xl border border-gray-200/90 shadow-sm space-y-2.5 landscape:space-y-1.5 hover:shadow-md transition-shadow">
                     <div className="flex justify-between items-center">
                       <label className="block text-xs font-black uppercase tracking-wider text-gray-700 flex items-center gap-1.5">
                         <span>🪑</span>
@@ -704,18 +716,19 @@ export default function KioskPage({
                           setTableInputError(null);
                         }
                       }}
+                      onFocus={(e) => setTimeout(() => e.target.scrollIntoView({ behavior: "smooth", block: "center" }), 200)}
                       disabled={!!tableRecord}
                       placeholder="Contoh: 05"
-                      className="w-full text-lg font-black px-4 py-3.5 border-2 border-gray-200 rounded-xl bg-gray-50/60 outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all text-gray-900 disabled:opacity-75 disabled:bg-gray-100"
+                      className="w-full text-lg landscape:text-base font-black px-4 py-3.5 landscape:py-2.5 border-2 border-gray-200 rounded-xl bg-gray-50/60 outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all text-gray-900 disabled:opacity-75 disabled:bg-gray-100"
                     />
-                    <p className="text-[11px] text-gray-400 font-semibold flex items-center gap-1">
+                    <p className="text-[11px] text-gray-400 font-semibold flex items-center gap-1 landscape:hidden">
                       <span>💡</span> Coba ambil nomor meja yang tersedia atau lihat angka di sudut mejamu ya!
                     </p>
                   </div>
                 )}
 
                 {/* 2. Nama Pemesan Field */}
-                <div className="bg-white p-5 rounded-2xl border border-gray-200/90 shadow-sm space-y-2.5 hover:shadow-md transition-shadow">
+                <div className="bg-white p-5 landscape:p-3.5 rounded-2xl border border-gray-200/90 shadow-sm space-y-2.5 landscape:space-y-1.5 hover:shadow-md transition-shadow">
                   <label className="block text-xs font-black uppercase tracking-wider text-gray-700 flex items-center gap-1.5">
                     <span>🏷️</span>
                     <span>Nama Panggilan Kamu</span>
@@ -732,10 +745,11 @@ export default function KioskPage({
                       setCustomerName(e.target.value);
                       setTableInputError(null);
                     }}
+                    onFocus={(e) => setTimeout(() => e.target.scrollIntoView({ behavior: "smooth", block: "center" }), 200)}
                     placeholder="Misal: Budi, Kak Siti, Bro Alif..."
-                    className="w-full text-lg font-black px-4 py-3.5 border-2 border-gray-200 rounded-xl bg-gray-50/60 outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all text-gray-900"
+                    className="w-full text-lg landscape:text-base font-black px-4 py-3.5 landscape:py-2.5 border-2 border-gray-200 rounded-xl bg-gray-50/60 outline-none focus:bg-white focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all text-gray-900"
                   />
-                  <p className="text-[11px] text-gray-400 font-semibold flex items-center gap-1">
+                  <p className="text-[11px] text-gray-400 font-semibold flex items-center gap-1 landscape:hidden">
                     <span>🙌</span> Biar ramah pas kami panggil atau antarkan pesananmu!
                   </p>
                 </div>
@@ -745,7 +759,7 @@ export default function KioskPage({
                   <motion.div
                     initial={{ opacity: 0, y: -5 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="p-4 rounded-2xl border-2 border-rose-200 bg-rose-50 text-rose-900 text-xs font-bold flex items-center gap-2.5 shadow-sm"
+                    className="p-4 landscape:p-2.5 rounded-2xl border-2 border-rose-200 bg-rose-50 text-rose-900 text-xs font-bold flex items-center gap-2.5 shadow-sm col-span-full"
                   >
                     <span className="text-lg">🙈</span>
                     <span>{tableInputError}</span>
@@ -755,7 +769,7 @@ export default function KioskPage({
               </div>
 
               {/* Fun Navigation Actions */}
-              <div className="pt-2 flex flex-col gap-3">
+              <div className="pt-2 landscape:pt-1 flex flex-col gap-3 landscape:gap-1.5">
                 <button
                   type="button"
                   disabled={isCheckingTable}
@@ -792,7 +806,7 @@ export default function KioskPage({
                     setTableInputError(null);
                     setScreen("summary");
                   }}
-                  className="w-full py-4 text-lg font-black text-white rounded-2xl shadow-xl active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="w-full py-4 landscape:py-3 text-lg landscape:text-base font-black text-white rounded-2xl shadow-xl active:scale-98 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                   style={{ background: "var(--tenant-primary)" }}
                 >
                   {isCheckingTable ? "Memeriksa Meja... ⏳" : "Lanjut Konfirmasi Pesanan"}
@@ -801,7 +815,7 @@ export default function KioskPage({
                 <button
                   type="button"
                   onClick={() => setScreen("cart")}
-                  className="w-full py-2.5 text-xs font-extrabold text-gray-500 hover:text-gray-900 transition-colors text-center cursor-pointer"
+                  className="w-full py-2.5 landscape:py-1 text-xs font-extrabold text-gray-500 hover:text-gray-900 transition-colors text-center cursor-pointer"
                 >
                   ← Cek Keranjang Lagi
                 </button>
@@ -1112,113 +1126,130 @@ export default function KioskPage({
                   onClick={() => setActiveProduct(null)}
                 />
                 <motion.div
-                  className="bg-white rounded-t-3xl sm:rounded-2xl w-full max-w-md flex flex-col overflow-hidden z-10 shadow-2xl relative"
+                  className="bg-white rounded-t-3xl sm:rounded-2xl w-full max-w-md landscape:max-w-2xl flex flex-col landscape:flex-row overflow-hidden z-10 shadow-2xl relative max-h-[92dvh]"
                   initial={{ opacity: 0, y: 24, scale: 0.98 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 16, scale: 0.98 }}
                   transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-                  style={{ maxHeight: "90vh" }}
                 >
-                  {/* Image Header with Promo Badge */}
-                  <div className="relative w-full bg-gray-50 flex items-center justify-center p-2" style={{ height: 240 }}>
+                  {/* Image Header with Promo Badge (Left sidebar in landscape) */}
+                  <div className="relative w-full landscape:w-44 bg-gray-50 flex items-center justify-center p-2 h-48 sm:h-56 landscape:h-auto flex-shrink-0 border-b landscape:border-b-0 landscape:border-r border-gray-100">
                     {activeProduct.image_urls[0] ? (
-                      <img src={activeProduct.image_urls[0]} alt={activeProduct.name} className="w-full h-full object-contain" />
+                      <img src={activeProduct.image_urls[0]} alt={activeProduct.name} className="w-full h-full object-contain max-h-44 landscape:max-h-36" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-5xl" style={{ background: "var(--tenant-primary)18" }}>🍽️</div>
                     )}
                     {hasPromo && (
-                      <span className="absolute top-4 left-4 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-xs font-black px-3 py-1 rounded-full shadow-lg border border-white/40 flex items-center gap-1">
-                        <span>🔥</span> PROMO DISKON {discountPct}%
+                      <span className="absolute top-3 left-3 bg-gradient-to-r from-rose-500 to-pink-500 text-white text-[10px] font-black px-2.5 py-1 rounded-full shadow-lg border border-white/40 flex items-center gap-1">
+                        <span>🔥</span> DISKON {discountPct}%
                       </span>
                     )}
                   </div>
 
-                  <div className="p-5 overflow-y-auto flex-1 flex flex-col gap-3">
-                    <div className="flex justify-between items-start gap-4">
-                      <div>
-                        <h2 className="text-xl font-bold leading-tight">{activeProduct.name}</h2>
-                        {hasPromo && (
-                          <span className="inline-block text-[11px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full mt-1.5">
-                            Hemat Rp {(activeProduct.base_price - activeProduct.discount_price!).toLocaleString("id-ID")}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-col items-end flex-shrink-0">
-                        {hasPromo && (
-                          <span className="text-xs text-gray-400 line-through font-semibold">
-                            Rp {Number(activeProduct.base_price).toLocaleString("id-ID")}
-                          </span>
-                        )}
-                        <p
-                          className="font-black text-xl leading-tight"
-                          style={{ color: hasPromo ? "#e11d48" : "var(--tenant-primary)" }}
-                        >
-                          Rp {Number(effectivePrice).toLocaleString("id-ID")}
-                        </p>
-                      </div>
-                    </div>
-
-                    {(activeProduct.is_featured || activeProduct.labels.length > 0) && (
-                      <div className="flex flex-wrap gap-1">
-                        {activeProduct.is_featured && (
-                          <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white shadow-xs" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>⭐ Unggulan</span>
-                        )}
-                        {activeProduct.labels.map((l) => (
-                          <span key={l} className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 capitalize">
-                            {l.replace(/_/g, " ")}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="mt-2">
-                      <h3 className="text-sm font-bold text-gray-800 mb-1">Deskripsi</h3>
-                      <p className="text-gray-500 text-sm leading-relaxed whitespace-pre-wrap">
-                        {activeProduct.description || "Tidak ada deskripsi tersedia untuk produk ini."}
-                      </p>
-                    </div>
-                    <div className="mt-1 flex flex-col gap-4 border-t pt-4">
-                      <div>
-                        <h3 className="text-sm font-bold text-gray-800 mb-2">Jumlah Pesanan</h3>
-                        <div className="flex items-center gap-3">
-                          <button onClick={() => setModalQuantity(Math.max(1, modalQuantity - 1))} className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-xl cursor-pointer">-</button>
-                          <input type="number" value={modalQuantity || ""} onChange={(e) => setModalQuantity(Math.max(1, parseInt(e.target.value) || 1))} className="w-16 h-10 text-center text-lg font-bold border-b-2 bg-transparent outline-none p-1" style={{ borderColor: 'var(--tenant-primary)' }} />
-                          <button onClick={() => setModalQuantity(modalQuantity + 1)} className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-xl cursor-pointer" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>+</button>
+                  {/* Right / Main Content Column */}
+                  <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                    <div className="p-4 sm:p-5 landscape:p-3.5 overflow-y-auto flex-1 flex flex-col gap-3 landscape:gap-2">
+                      <div className="flex justify-between items-start gap-4">
+                        <div>
+                          <h2 className="text-xl landscape:text-base font-bold leading-tight">{activeProduct.name}</h2>
+                          {hasPromo && (
+                            <span className="inline-block text-[11px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full mt-1">
+                              Hemat Rp {(activeProduct.base_price - activeProduct.discount_price!).toLocaleString("id-ID")}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end flex-shrink-0">
+                          {hasPromo && (
+                            <span className="text-xs text-gray-400 line-through font-semibold">
+                              Rp {Number(activeProduct.base_price).toLocaleString("id-ID")}
+                            </span>
+                          )}
+                          <p
+                            className="font-black text-xl landscape:text-base leading-tight"
+                            style={{ color: hasPromo ? "#e11d48" : "var(--tenant-primary)" }}
+                          >
+                            Rp {Number(effectivePrice).toLocaleString("id-ID")}
+                          </p>
                         </div>
                       </div>
 
-                      <div>
-                        <h3 className="text-sm font-bold text-gray-800 mb-2">Catatan Tambahan</h3>
-                        <textarea
-                          value={modalNotes}
-                          onChange={(e) => setModalNotes(e.target.value)}
-                          placeholder="Contoh: Jangan terlalu pedas, tambah es, dll."
-                          className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-[var(--tenant-primary)] text-sm"
-                          rows={2}
-                        />
+                      {(activeProduct.is_featured || activeProduct.labels.length > 0) && (
+                        <div className="flex flex-wrap gap-1">
+                          {activeProduct.is_featured && (
+                            <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white shadow-xs" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>⭐ Unggulan</span>
+                          )}
+                          {activeProduct.labels.map((l) => (
+                            <span key={l} className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 capitalize">
+                              {l.replace(/_/g, " ")}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="mt-1 landscape:hidden">
+                        <h3 className="text-sm font-bold text-gray-800 mb-1">Deskripsi</h3>
+                        <p className="text-gray-500 text-sm leading-relaxed whitespace-pre-wrap">
+                          {activeProduct.description || "Tidak ada deskripsi tersedia untuk produk ini."}
+                        </p>
+                      </div>
+
+                      {/* Prioritized Input Section */}
+                      <div className="mt-1 flex flex-col gap-3.5 landscape:gap-2.5 border-t pt-3 landscape:pt-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="text-sm font-bold text-gray-800">Jumlah Pesanan</h3>
+                          <div className="flex items-center gap-3">
+                            <button onClick={() => setModalQuantity(Math.max(1, modalQuantity - 1))} className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-600 text-lg cursor-pointer">-</button>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              value={modalQuantity || ""}
+                              onChange={(e) => {
+                                const numericOnly = e.target.value.replace(/\D/g, "");
+                                setModalQuantity(Math.max(1, parseInt(numericOnly, 10) || 1));
+                              }}
+                              onFocus={(e) => setTimeout(() => e.target.scrollIntoView({ behavior: "smooth", block: "center" }), 200)}
+                              className="w-14 h-9 text-center text-base font-bold border-b-2 bg-transparent outline-none p-1"
+                              style={{ borderColor: "var(--tenant-primary)" }}
+                            />
+                            <button onClick={() => setModalQuantity(modalQuantity + 1)} className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-white text-lg cursor-pointer" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>+</button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <h3 className="text-sm font-bold text-gray-800 mb-1.5">Catatan Tambahan</h3>
+                          <textarea
+                            value={modalNotes}
+                            onChange={(e) => setModalNotes(e.target.value)}
+                            onFocus={(e) => setTimeout(() => e.target.scrollIntoView({ behavior: "smooth", block: "center" }), 200)}
+                            placeholder="Contoh: Jangan terlalu pedas, tambah es, dll."
+                            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-[var(--tenant-primary)] text-sm"
+                            rows={2}
+                          />
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="p-4 border-t flex gap-3 bg-white">
-                    <button
-                      className="px-6 py-4 rounded-xl font-bold border-2 text-gray-600 border-gray-200 cursor-pointer active:bg-gray-100 transition-colors"
-                      onClick={() => setActiveProduct(null)}
-                    >
-                      Tutup
-                    </button>
-                    <button
-                      className="flex-1 py-4 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-lg active:scale-95 transition-transform cursor-pointer shadow-md"
-                      style={{ background: hasPromo ? "#e11d48" : "var(--tenant-primary)" }}
-                      onClick={() => {
-                        addToCart(activeProduct, modalQuantity, modalNotes);
-                        setActiveProduct(null);
-                      }}
-                    >
-                      <span>Tambah</span>
-                      <span>•</span>
-                      <span>Rp {(Number(effectivePrice) * modalQuantity).toLocaleString("id-ID")}</span>
-                    </button>
+                    <div className="p-3 sm:p-4 landscape:p-2.5 border-t flex gap-3 bg-white flex-shrink-0">
+                      <button
+                        className="px-5 py-3 landscape:py-2 rounded-xl font-bold border-2 text-gray-600 border-gray-200 cursor-pointer active:bg-gray-100 transition-colors text-sm"
+                        onClick={() => setActiveProduct(null)}
+                      >
+                        Tutup
+                      </button>
+                      <button
+                        className="flex-1 py-3 landscape:py-2 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-base landscape:text-sm active:scale-95 transition-transform cursor-pointer shadow-md"
+                        style={{ background: hasPromo ? "#e11d48" : "var(--tenant-primary)" }}
+                        onClick={() => {
+                          addToCart(activeProduct, modalQuantity, modalNotes);
+                          setActiveProduct(null);
+                        }}
+                      >
+                        <span>Tambah</span>
+                        <span>•</span>
+                        <span>Rp {(Number(effectivePrice) * modalQuantity).toLocaleString("id-ID")}</span>
+                      </button>
+                    </div>
                   </div>
                 </motion.div>
               </div>
