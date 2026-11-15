@@ -27,12 +27,14 @@ import {
   type StaffListItem,
 } from "@/services/staffService";
 import { useRouter } from "next/navigation";
+import ImageUploadField from "@/components/ImageUploadField";
 import type { Tenant, Category, Product, BusinessLogic, FinanceConfig, ReceiptConfig, ManualPaymentChannel, UserRole } from "@/types";
 
 const STEPS = ["Identitas & Branding", "Konfigurasi Bisnis", "Akun Owner", "Review & Selesai"];
 
 type WizardData = {
   name: string; slug: string; subtitle: string; description: string; logo_url: string;
+  qris_image_url: string;
   primary_color: string; secondary_color: string;
   payment_timing: "prepaid" | "postpaid"; payment_mode: "gateway" | "manual";
   numbering: "queue" | "table"; require_cashier_verification: boolean;
@@ -44,6 +46,7 @@ type WizardData = {
 
 const DEFAULT_WIZARD: WizardData = {
   name: "", slug: "", subtitle: "", description: "", logo_url: "",
+  qris_image_url: "",
   primary_color: "#6366f1", secondary_color: "#a5b4fc",
   payment_timing: "prepaid", payment_mode: "manual",
   numbering: "queue", require_cashier_verification: false,
@@ -78,9 +81,15 @@ export default function SuperAdminPage() {
   useEffect(() => {
     if (catModalOpen) {
       if (editingCat) {
-        catForm.setFieldsValue({ name: editingCat.name, sort_order: editingCat.sort_order, is_active: editingCat.is_active });
+        catForm.setFieldsValue({
+          name: editingCat.name,
+          sort_order: editingCat.sort_order,
+          is_active: editingCat.is_active,
+          image_url: editingCat.image_url ?? "",
+        });
       } else {
         catForm.resetFields();
+        catForm.setFieldsValue({ is_active: true, sort_order: 0 });
       }
     }
   }, [catModalOpen, editingCat, catForm]);
@@ -200,10 +209,13 @@ export default function SuperAdminPage() {
 
   const openEdit = (t: Tenant) => {
     setEditingTenant(t);
+    const qrisChannel = t.manual_payment_channels?.find((c) => c.type === "qris_static");
+    const qrisImageUrl = qrisChannel?.image_url ?? "";
     setWizardData({
       ...DEFAULT_WIZARD,
       name: t.name, slug: t.slug, subtitle: t.subtitle ?? "", description: t.description ?? "",
       logo_url: t.logo_url ?? "",
+      qris_image_url: qrisImageUrl,
       primary_color: t.visual_config.primary_color, secondary_color: t.visual_config.secondary_color,
       payment_timing: t.business_logic.payment_timing, payment_mode: t.business_logic.payment_mode,
       numbering: t.business_logic.numbering, require_cashier_verification: t.business_logic.require_cashier_verification,
@@ -213,7 +225,7 @@ export default function SuperAdminPage() {
       receipt_header: t.receipt_config.header_text, receipt_footer: t.receipt_config.footer_text,
     });
     step1Form.setFieldsValue({ name: t.name, slug: t.slug, subtitle: t.subtitle, description: t.description, logo_url: t.logo_url, primary_color: t.visual_config.primary_color, secondary_color: t.visual_config.secondary_color });
-    step2Form.setFieldsValue({ payment_timing: t.business_logic.payment_timing, payment_mode: t.business_logic.payment_mode, numbering: t.business_logic.numbering, require_cashier_verification: t.business_logic.require_cashier_verification, pos_only: t.business_logic.pos_only ?? false, tax_percentage: t.finance_config.tax_percentage, service_charge_percentage: t.finance_config.service_charge_percentage, takeaway_fee: t.finance_config.takeaway_fee, receipt_header: t.receipt_config.header_text, receipt_footer: t.receipt_config.footer_text });
+    step2Form.setFieldsValue({ payment_timing: t.business_logic.payment_timing, payment_mode: t.business_logic.payment_mode, qris_image_url: qrisImageUrl, numbering: t.business_logic.numbering, require_cashier_verification: t.business_logic.require_cashier_verification, pos_only: t.business_logic.pos_only ?? false, tax_percentage: t.finance_config.tax_percentage, service_charge_percentage: t.finance_config.service_charge_percentage, takeaway_fee: t.finance_config.takeaway_fee, receipt_header: t.receipt_config.header_text, receipt_footer: t.receipt_config.footer_text });
     setWizardStep(0);
     setWizardOpen(true);
   };
@@ -244,7 +256,13 @@ export default function SuperAdminPage() {
     business_logic: { payment_timing: d.pos_only ? "prepaid" : d.payment_timing, payment_mode: d.payment_mode, numbering: d.numbering, require_cashier_verification: d.require_cashier_verification, pos_only: d.pos_only } as BusinessLogic,
     finance_config: { tax_percentage: d.tax_percentage ?? 0, service_charge_percentage: d.service_charge_percentage ?? 0, takeaway_fee: d.takeaway_fee ?? 0 } as FinanceConfig,
     manual_payment_channels: d.payment_mode === "manual" ? [
-      { id: "ch-001", type: "qris_static", label: "QRIS / E-Wallet", instructions: "Scan QR lalu tunjukkan bukti ke kasir" },
+      {
+        id: "ch-001",
+        type: "qris_static",
+        label: "QRIS / E-Wallet",
+        instructions: "Scan QR lalu tunjukkan bukti ke kasir",
+        image_url: d.qris_image_url || undefined,
+      },
       { id: "ch-002", type: "cash", label: "Tunai / Cash", instructions: "Bayar langsung ke kasir" },
     ] as ManualPaymentChannel[] : [],
     receipt_config: { header_text: d.receipt_header || "", footer_text: d.receipt_footer || "", show_logo: true } as ReceiptConfig,
@@ -302,12 +320,16 @@ export default function SuperAdminPage() {
     setMenuData(await res.json());
   };
 
-  const saveCat = async (vals: { name: string; sort_order: number }) => {
+  const saveCat = async (vals: { name: string; sort_order: number; is_active?: boolean; image_url?: string }) => {
     if (!menuDrawer.tenant) return;
+    const payload = {
+      ...vals,
+      image_url: vals.image_url?.trim() || null,
+    };
     if (editingCat) {
-      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", _itemId: editingCat.id, ...vals }) });
+      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", _itemId: editingCat.id, ...payload }) });
     } else {
-      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", ...vals }) });
+      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", ...payload }) });
     }
     catForm.resetFields(); setCatModalOpen(false); setEditingCat(null); refreshMenu();
   };
@@ -366,13 +388,33 @@ export default function SuperAdminPage() {
     {
       title: "Tenant",
       render: (_: unknown, t: Tenant) => (
-        <Space orientation="vertical" size={2}>
-          <Space>
-            <span style={{ width: 12, height: 12, borderRadius: "50%", background: t.visual_config.primary_color, display: "inline-block", flexShrink: 0 }} />
-            <span className="font-semibold">{t.name}</span>
-            <Tag color="blue" style={{ fontSize: 11 }}>/{t.slug}</Tag>
+        <Space size={10}>
+          {t.logo_url ? (
+            <img
+              src={t.logo_url}
+              alt={t.name}
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 9,
+                objectFit: "cover",
+                border: "1px solid #e2e8f0",
+                background: "#f8fafc",
+                flexShrink: 0,
+              }}
+            />
+          ) : (
+            <span style={{ width: 34, height: 34, borderRadius: 9, background: t.visual_config.primary_color, display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
+              {t.name.slice(0, 1).toUpperCase()}
+            </span>
+          )}
+          <Space orientation="vertical" size={1}>
+            <Space size={6}>
+              <span className="font-semibold">{t.name}</span>
+              <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>/{t.slug}</Tag>
+            </Space>
+            {t.subtitle && <span style={{ color: "#94a3b8", fontSize: 12 }}>{t.subtitle}</span>}
           </Space>
-          {t.subtitle && <span style={{ color: "#94a3b8", fontSize: 12 }}>{t.subtitle}</span>}
         </Space>
       ),
     },
@@ -455,8 +497,14 @@ export default function SuperAdminPage() {
       <Form.Item name="description" label="Deskripsi Singkat">
         <Input.TextArea rows={2} placeholder="Kafe modern dengan suasana nyaman..." />
       </Form.Item>
-      <Form.Item name="logo_url" label="URL Logo">
-        <Input placeholder="https://..." prefix="🖼️" />
+      <Form.Item name="logo_url" label="Logo Outlet / Brand">
+        <ImageUploadField
+          tenantId={editingTenant?.id ?? "_unassigned"}
+          folder="logos"
+          placeholder="https://contoh.com/logo.png"
+          helperText="Rekomendasi persegi 1:1 (PNG transparan / JPG / WebP)"
+          compact
+        />
       </Form.Item>
       <Divider style={{ margin: "12px 0", fontSize: 13 }}>Warna Tema</Divider>
       <Row gutter={12}>
@@ -574,6 +622,28 @@ export default function SuperAdminPage() {
           </Form.Item>
         </Col>
       </Row>
+      <Form.Item
+        noStyle
+        shouldUpdate={(prev, cur) => prev.payment_mode !== cur.payment_mode}
+      >
+        {({ getFieldValue }) =>
+          getFieldValue("payment_mode") === "manual" ? (
+            <Form.Item
+              name="qris_image_url"
+              label="Gambar Barcode QRIS Statis (Opsional)"
+              extra="Ditampilkan di layar Kiosk saat pelanggan memilih pembayaran QRIS"
+            >
+              <ImageUploadField
+                tenantId={editingTenant?.id ?? "_unassigned"}
+                folder="qris"
+                placeholder="https://contoh.com/qris.png"
+                helperText="Upload foto/screenshot barcode QRIS toko (otomatis tajam 1080px)"
+                compact
+              />
+            </Form.Item>
+          ) : null
+        }
+      </Form.Item>
       <Divider style={{ margin: "12px 0", fontSize: 13 }}>Keuangan</Divider>
       <Row gutter={12}>
         <Col span={8}><Form.Item name="tax_percentage" label="PPN (%)"><InputNumber min={0} max={100} style={{ width: "100%" }} /></Form.Item></Col>
@@ -1046,7 +1116,25 @@ export default function SuperAdminPage() {
                 loading={menuLoading}
                 pagination={false}
                 columns={[
-                  { title: "Nama", dataIndex: "name" },
+                  {
+                    title: "Kategori",
+                    render: (_: unknown, r: Category) => (
+                      <Space size={10}>
+                        {r.image_url ? (
+                          <img
+                            src={r.image_url}
+                            alt={r.name}
+                            style={{ width: 32, height: 32, borderRadius: 8, objectFit: "cover", border: "1px solid #e2e8f0" }}
+                          />
+                        ) : (
+                          <div style={{ width: 32, height: 32, borderRadius: 8, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>
+                            📂
+                          </div>
+                        )}
+                        <span className="font-medium">{r.name}</span>
+                      </Space>
+                    ),
+                  },
                   { title: "Urutan", dataIndex: "sort_order", width: 80 },
                   { title: "Status", render: (_: unknown, r: Category) => <Tag color={r.is_active ? "green" : "red"}>{r.is_active ? "Aktif" : "Nonaktif"}</Tag> },
                   {
@@ -1078,7 +1166,31 @@ export default function SuperAdminPage() {
                 loading={menuLoading}
                 pagination={{ pageSize: 10 }}
                 columns={[
-                  { title: "Produk", render: (_: unknown, r: Product) => <Space orientation="vertical" size={0}><span className="font-medium">{r.name}</span><span style={{ color: "#94a3b8", fontSize: 12 }}>Rp {Number(r.base_price).toLocaleString("id-ID")}</span></Space> },
+                  {
+                    title: "Produk",
+                    render: (_: unknown, r: Product) => {
+                      const img = r.image_urls?.[0];
+                      return (
+                        <Space size={10}>
+                          {img ? (
+                            <img
+                              src={img}
+                              alt={r.name}
+                              style={{ width: 38, height: 38, borderRadius: 8, objectFit: "cover", border: "1px solid #e2e8f0", flexShrink: 0 }}
+                            />
+                          ) : (
+                            <div style={{ width: 38, height: 38, borderRadius: 8, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>
+                              🍽️
+                            </div>
+                          )}
+                          <Space orientation="vertical" size={0}>
+                            <span className="font-medium">{r.name}</span>
+                            <span style={{ color: "#94a3b8", fontSize: 12 }}>Rp {Number(r.base_price).toLocaleString("id-ID")}</span>
+                          </Space>
+                        </Space>
+                      );
+                    },
+                  },
                   { title: "Kategori", render: (_: unknown, r: Product) => { const cat = menuData.categories.find(c => c.id === r.category_id); return cat?.name ?? <span style={{ color: "#94a3b8" }}>—</span>; } },
                   { title: "Label", render: (_: unknown, r: Product) => r.labels.map(l => <Tag key={l} style={{ fontSize: 11 }}>{l}</Tag>) },
                   { title: "Stok / Status", render: (_: unknown, r: Product) => <Space><Tag color={r.is_available ? "green" : "red"}>{r.is_available ? "Tersedia" : "Habis"}</Tag>{r.stock_count != null && <Tag>{r.stock_count}</Tag>}</Space> },
@@ -1109,8 +1221,18 @@ export default function SuperAdminPage() {
       >
         <Form form={catForm} onFinish={saveCat} layout="vertical">
           <Form.Item name="name" label="Nama Kategori" rules={[{ required: true }]}><Input placeholder="Kopi Panas" /></Form.Item>
-          <Form.Item name="sort_order" label="Urutan Tampil"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item>
-          <Form.Item name="is_active" label="Aktif" valuePropName="checked"><Switch /></Form.Item>
+          <Form.Item name="image_url" label="Gambar / Ikon Kategori (Opsional)">
+            <ImageUploadField
+              tenantId={menuDrawer.tenant?.id}
+              folder="categories"
+              placeholder="https://contoh.com/kategori.webp"
+              compact
+            />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}><Form.Item name="sort_order" label="Urutan Tampil"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item></Col>
+            <Col span={12}><Form.Item name="is_active" label="Status Kategori" valuePropName="checked"><Switch checkedChildren="Aktif" unCheckedChildren="Nonaktif" /></Form.Item></Col>
+          </Row>
         </Form>
       </Modal>
 
@@ -1119,7 +1241,7 @@ export default function SuperAdminPage() {
         title={<span style={{ fontWeight: 700 }}>{editingProd ? "Edit Produk" : "Tambah Produk"}</span>}
         open={prodModalOpen}
         onCancel={() => { setProdModalOpen(false); setEditingProd(null); }}
-        onOk={() => prodForm.submit()} okText="Simpan" width={560}
+        onOk={() => prodForm.submit()} okText="Simpan" width={580}
         okButtonProps={{ style: { background: "#09090b", borderColor: "#09090b" } }}
       >
         <Form form={prodForm} onFinish={saveProd} layout="vertical" requiredMark="optional">
@@ -1136,20 +1258,26 @@ export default function SuperAdminPage() {
               style={{ width: "100%" }} /></Form.Item></Col>
           </Row>
           <Form.Item name="description" label="Deskripsi"><Input.TextArea rows={2} /></Form.Item>
+          <Form.Item name="image_url" label="Foto Produk">
+            <ImageUploadField
+              tenantId={menuDrawer.tenant?.id}
+              folder="products"
+              placeholder="https://contoh.com/produk.webp"
+              helperText="Rekomendasi persegi 1:1 (JPG, PNG, WebP — otomatis dikompres ke WebP)"
+              compact
+            />
+          </Form.Item>
           <Row gutter={12}>
-            <Col span={12}>
+            <Col span={9}>
               <Form.Item name="category_id" label="Kategori">
                 <Select placeholder="Pilih kategori" allowClear>
                   {menuData.categories.map(c => <Select.Option key={c.id} value={c.id}>{c.name}</Select.Option>)}
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}><Form.Item name="image_url" label="URL Gambar"><Input placeholder="https://..." /></Form.Item></Col>
-          </Row>
-          <Row gutter={12}>
-            <Col span={8}><Form.Item name="sort_order" label="Urutan"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item></Col>
-            <Col span={8}><Form.Item name="stock_count" label="Stok (kosong=∞)"><InputNumber min={0} placeholder="∞" style={{ width: "100%" }} /></Form.Item></Col>
-            <Col span={8}><Form.Item name="labels" label="Label" extra="Pisah dengan koma"><Input placeholder="best_seller, new" /></Form.Item></Col>
+            <Col span={5}><Form.Item name="sort_order" label="Urutan"><InputNumber min={0} style={{ width: "100%" }} /></Form.Item></Col>
+            <Col span={5}><Form.Item name="stock_count" label="Stok (∞)"><InputNumber min={0} placeholder="∞" style={{ width: "100%" }} /></Form.Item></Col>
+            <Col span={5}><Form.Item name="labels" label="Label"><Input placeholder="best_seller" /></Form.Item></Col>
           </Row>
           <Row gutter={12}>
             <Col span={12}><Form.Item name="is_available" valuePropName="checked" initialValue={true}><Switch checkedChildren="Tersedia" unCheckedChildren="Habis" /></Form.Item></Col>

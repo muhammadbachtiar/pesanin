@@ -444,10 +444,17 @@ export default function KioskPage({
                 <button
                   key={cat.id}
                   onClick={() => setSelectedCategory(cat.id)}
-                  className="whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 transition-all"
+                  className="whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 transition-all inline-flex items-center gap-1.5"
                   style={selectedCategory === cat.id ? { background: "var(--tenant-primary)", color: "#fff" } : { background: "#f1f5f9", color: "#64748b" }}
                 >
-                  {cat.name}
+                  {cat.image_url && (
+                    <img
+                      src={cat.image_url}
+                      alt={cat.name}
+                      className="w-4 h-4 rounded-full object-cover flex-shrink-0"
+                    />
+                  )}
+                  <span>{cat.name}</span>
                 </button>
               ))}
             </div>
@@ -1028,21 +1035,34 @@ export default function KioskPage({
                 <h2 className="text-2xl font-bold">Pilih Pembayaran</h2>
                 <div className="w-full max-w-sm space-y-3">
                   {tenant.manual_payment_channels.map((ch) => (
-                    <button
-                      key={ch.id}
-                      onClick={() => setScreen("success")}
-                      className="card w-full p-4 flex items-center gap-4 text-left"
-                    >
-                      <span className="text-3xl">
-                        {ch.type === "qris_static" ? "📱" : ch.type === "bank_transfer" ? "🏦" : "💵"}
-                      </span>
-                      <div>
-                        <p className="font-semibold">{ch.label}</p>
-                        {ch.instructions && (
-                          <p className="text-xs text-gray-500 mt-0.5">{ch.instructions}</p>
-                        )}
-                      </div>
-                    </button>
+                    <div key={ch.id} className="card w-full p-4 space-y-3">
+                      <button
+                        onClick={() => setScreen("success")}
+                        className="w-full flex items-center gap-4 text-left"
+                      >
+                        <span className="text-3xl">
+                          {ch.type === "qris_static" ? "📱" : ch.type === "bank_transfer" ? "🏦" : "💵"}
+                        </span>
+                        <div>
+                          <p className="font-semibold">{ch.label}</p>
+                          {ch.instructions && (
+                            <p className="text-xs text-gray-500 mt-0.5">{ch.instructions}</p>
+                          )}
+                        </div>
+                      </button>
+                      {ch.image_url && (
+                        <div className="p-3 bg-white rounded-xl border border-gray-200 flex flex-col items-center gap-2">
+                          <img
+                            src={ch.image_url}
+                            alt={ch.label}
+                            className="max-h-56 w-auto object-contain rounded-lg"
+                          />
+                          <span className="text-[11px] font-semibold text-gray-500">
+                            Scan kode QRIS di atas lalu konfirmasi ke kasir
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               </>
@@ -1056,13 +1076,13 @@ export default function KioskPage({
         {screen === "success" && (
           <motion.div
             key="success"
-            className="fixed inset-0 flex flex-col items-center justify-center gap-6 p-8"
+            className="fixed inset-0 flex flex-col items-center justify-center gap-5 p-6 overflow-y-auto"
             style={{ background: "var(--tenant-primary)" }}
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
           >
             <motion.div
-              className="text-7xl"
+              className="text-6xl"
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", delay: 0.2 }}
@@ -1070,7 +1090,7 @@ export default function KioskPage({
               🎉
             </motion.div>
             <h2 className="text-3xl font-bold text-white text-center">Terima Kasih!</h2>
-            <div className="bg-white rounded-2xl p-6 text-center w-full max-w-xs shadow-xl">
+            <div className="bg-white rounded-2xl p-5 text-center w-full max-w-xs shadow-xl">
               <p className="text-gray-500 text-sm">Nomor Antrian Anda</p>
               <p className="text-6xl font-black mt-1" style={{ color: "var(--tenant-primary)" }}>
                 #{queueNumber}
@@ -1084,6 +1104,31 @@ export default function KioskPage({
                 </>
               )}
             </div>
+
+            {bl.payment_timing !== "postpaid" &&
+              (() => {
+                const qrisChan = tenant.manual_payment_channels?.find(
+                  (c) => c.type === "qris_static" && c.image_url
+                );
+                if (!qrisChan?.image_url) return null;
+                return (
+                  <div className="bg-white rounded-2xl p-4 text-center w-full max-w-xs shadow-xl space-y-2">
+                    <p className="text-xs font-extrabold uppercase tracking-wider text-gray-700">
+                      📱 Bayar via QRIS Toko
+                    </p>
+                    <div className="p-2 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-center">
+                      <img
+                        src={qrisChan.image_url}
+                        alt="QRIS"
+                        className="max-h-52 w-auto object-contain rounded-lg"
+                      />
+                    </div>
+                    <p className="text-[11px] text-gray-500 font-medium">
+                      {qrisChan.instructions || "Scan QRIS di atas & tunjukkan bukti ke kasir"}
+                    </p>
+                  </div>
+                );
+              })()}
 
             <p className="text-white text-center text-sm px-4 max-w-sm opacity-90 leading-relaxed">
               {bl.payment_timing === "postpaid"

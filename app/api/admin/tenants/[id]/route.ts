@@ -1,14 +1,19 @@
 import { NextResponse } from "next/server";
-import { requireSuperAdmin, createSupabaseAdminClient } from "@/lib/serverAuth";
+import { requireSuperAdmin, requireTenantAccess, createSupabaseAdminClient } from "@/lib/serverAuth";
+import { removeTenantAssets } from "@/lib/storage";
 
 export async function PATCH(
     req: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
-    const { error } = await requireSuperAdmin();
+    const { id } = await params;
+    const { profile, error } = await requireTenantAccess(id);
     if (error) return error;
 
-    const { id } = await params;
+    if (profile.role !== "SUPER_ADMIN" && profile.role !== "OWNER") {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const body = await req.json();
     const sb = createSupabaseAdminClient();
 
@@ -50,5 +55,9 @@ export async function DELETE(
     const { error: dbErr } = await sb.from("tenants").delete().eq("id", id);
 
     if (dbErr) return NextResponse.json({ error: dbErr.message }, { status: 400 });
+
+    // Bersihkan seluruh file gambar milik tenant dari Supabase Storage
+    await removeTenantAssets(id);
+
     return NextResponse.json({ ok: true });
 }

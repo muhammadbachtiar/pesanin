@@ -2,12 +2,13 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Table, Tag, Button, Modal, Form, Input, Select, Switch, InputNumber, Tabs, Popconfirm, message, Card } from "antd";
-import { getTenantBySlug } from "@/services/tenantService";
+import { getTenantBySlug, updateTenant } from "@/services/tenantService";
 import { getAllProductsByTenant, updateProduct, toggleProductAvailability } from "@/services/productService";
 import { getStaffByTenant, createStaffAccount, toggleStaffActive, deleteStaffAccount, setStaffPin, ROLE_LABEL, ROLE_COLOR } from "@/services/staffService";
 import { TenantRoleGuard } from "@/components/auth/TenantRoleGuard";
+import ImageUploadField from "@/components/ImageUploadField";
 import { supabase } from "@/lib/supabase";
-import type { Tenant, Product, Profile, UserRole } from "@/types";
+import type { Tenant, Product, Profile, UserRole, ManualPaymentChannel } from "@/types";
 
 export default function TenantAdminPage({ params }: { params: Promise<{ tenant_slug: string }> }) {
   const [tenant, setTenant] = useState<Tenant | null>(null);
@@ -38,6 +39,11 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
   const [productForm] = Form.useForm();
   const [productSubmitting, setProductSubmitting] = useState(false);
 
+  // Branding & QRIS Outlet State
+  const [outletLogoUrl, setOutletLogoUrl] = useState("");
+  const [outletQrisUrl, setOutletQrisUrl] = useState("");
+  const [savingBranding, setSavingBranding] = useState(false);
+
   const loadData = useCallback(async (tenantId: string) => {
     setLoadingStaff(true);
     setLoadingProducts(true);
@@ -63,10 +69,79 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
       const t = await getTenantBySlug(tenant_slug);
       if (!t) return;
       setTenant(t);
+      setOutletLogoUrl(t.logo_url ?? "");
+      const qrisChan = t.manual_payment_channels?.find((c) => c.type === "qris_static");
+      setOutletQrisUrl(qrisChan?.image_url ?? "");
       await loadData(t.id);
     }
     init();
   }, [params, loadData]);
+
+  // ── Handler Simpan Branding & QRIS Outlet ──
+  const handleSaveOutletAssets = async () => {
+    if (!tenant) return;
+    setSavingBranding(true);
+    try {
+      const currentChannels: ManualPaymentChannel[] =
+        Array.isArray(tenant.manual_payment_channels) && tenant.manual_payment_channels.length > 0
+          ? tenant.manual_payment_channels
+          : [
+              {
+                id: "ch-001",
+                type: "qris_static",
+                label: "QRIS / E-Wallet",
+                instructions: "Scan QR lalu tunjukkan bukti ke kasir",
+              },
+              {
+                id: "ch-002",
+                type: "cash",
+                label: "Tunai / Cash",
+                instructions: "Bayar langsung ke kasir",
+              },
+            ];
+
+      let hasQris = false;
+      const updatedChannels: ManualPaymentChannel[] = currentChannels.map((ch) => {
+        if (ch.type === "qris_static") {
+          hasQris = true;
+          return { ...ch, image_url: outletQrisUrl.trim() || undefined };
+        }
+        return ch;
+      });
+
+      if (!hasQris && outletQrisUrl.trim()) {
+        updatedChannels.unshift({
+          id: "ch-001",
+          type: "qris_static",
+          label: "QRIS / E-Wallet",
+          instructions: "Scan QR lalu tunjukkan bukti ke kasir",
+          image_url: outletQrisUrl.trim(),
+        });
+      }
+
+      const nextLogo = outletLogoUrl.trim() || null;
+      const ok = await updateTenant(tenant.id, {
+        logo_url: nextLogo,
+        manual_payment_channels: updatedChannels,
+      });
+
+      if (ok) {
+        setTenant({
+          ...tenant,
+          logo_url: nextLogo,
+          manual_payment_channels: updatedChannels,
+        });
+        message.success("Logo outlet & barcode QRIS berhasil diperbarui!");
+      } else {
+        message.error("Gagal menyimpan aset outlet.");
+      }
+    } catch (err) {
+      console.error("handleSaveOutletAssets error:", err);
+      message.error("Terjadi kesalahan saat menyimpan aset outlet.");
+    } finally {
+      setSavingBranding(false);
+    }
+  };
 
   // ── Handler Tambah Staf ──
   const handleCreateStaff = async () => {
@@ -149,7 +224,7 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
     }
   };
 
-  // ── Handler Edit Promo & Stok Menu ──
+  // ── Handler Edit Promo, Stok & Foto Menu ──
   const handleSaveProductPromo = async () => {
     try {
       const values = await productForm.validateFields();
@@ -158,20 +233,22 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
 
       const discountPrice = values.discount_price ? Number(values.discount_price) : null;
       const stockCount = values.stock_count !== undefined && values.stock_count !== null ? Number(values.stock_count) : null;
+      const imageUrl = (values.image_url ?? "").trim();
 
       const res = await updateProduct(editProductModal.product.id, {
         base_price: Number(values.base_price),
         discount_price: discountPrice,
         stock_count: stockCount,
+        image_urls: imageUrl ? [imageUrl] : [],
         is_available: stockCount !== null && stockCount <= 0 ? false : editProductModal.product.is_available,
       });
 
       if (res.success) {
-        message.success("Pengaturan harga promo & stok berhasil disimpan!");
+        message.success("Foto, harga promo & stok produk berhasil disimpan!");
         setEditProductModal({ open: false, product: null });
         if (tenant) loadData(tenant.id);
       } else {
-        message.error(res.error || "Gagal memperbarui produk. Pastikan kolom database 'discount_price' sudah dibuat.");
+        message.error(res.error || "Gagal memperbarui produk.");
       }
     } catch (err) {
       console.error("handleSaveProductPromo error:", err);
@@ -363,13 +440,14 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
           onClick={() => {
             setEditProductModal({ open: true, product: p });
             productForm.setFieldsValue({
+              image_url: p.image_urls?.[0] || p.image_urls || "",
               base_price: p.base_price,
               discount_price: p.discount_price || undefined,
               stock_count: p.stock_count !== null ? p.stock_count : undefined,
             });
           }}
         >
-          ⚙️ Atur Promo & Stok
+          ⚙️ Foto, Promo & Stok
         </Button>
       ),
     },
@@ -519,40 +597,94 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
                   key: "outlet",
                   label: (
                     <span className="font-bold text-sm flex items-center gap-2">
-                      ⚙️ Ringkasan Konfigurasi Outlet
+                      ⚙️ Branding, QRIS & Konfigurasi Outlet
                     </span>
                   ),
                   children: (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                      <div className="p-4 bg-gray-50 rounded-2xl border space-y-2 text-xs">
-                        <h4 className="font-bold text-sm text-gray-800">Alur Bisnis & Pemesanan</h4>
-                        <div className="flex justify-between py-1 border-b">
-                          <span className="text-gray-500">Mode POS Only:</span>
-                          <span className="font-bold">{tenant.business_logic?.pos_only ? "Aktif (Standalone POS)" : "Nonaktif (Kafe Resto Normal)"}</span>
+                    <div className="space-y-6 pt-2">
+                      {/* ── Upload Logo & QRIS Statis ── */}
+                      <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                          <div>
+                            <h4 className="font-extrabold text-base text-slate-900">🖼️ Aset Visual & Pembayaran QRIS</h4>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              Unggah logo outlet dan gambar barcode QRIS statis toko. Gambar otomatis dioptimasi ke format WebP.
+                            </p>
+                          </div>
+                          <Button
+                            type="primary"
+                            loading={savingBranding}
+                            onClick={handleSaveOutletAssets}
+                            style={{ background: "var(--tenant-primary)" }}
+                            className="font-bold rounded-xl"
+                          >
+                            💾 Simpan Aset Outlet
+                          </Button>
                         </div>
-                        <div className="flex justify-between py-1 border-b">
-                          <span className="text-gray-500">Waktu Pembayaran:</span>
-                          <span className="font-bold uppercase">{tenant.business_logic?.payment_timing || "Prepaid"}</span>
-                        </div>
-                        <div className="flex justify-between py-1">
-                          <span className="text-gray-500">Mode Penomoran:</span>
-                          <span className="font-bold uppercase">{tenant.business_logic?.numbering || "Queue"}</span>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Logo Outlet / Brand (Tampil di Kiosk, Kasir & Struk)
+                            </label>
+                            <ImageUploadField
+                              tenantId={tenant.id}
+                              folder="logos"
+                              value={outletLogoUrl}
+                              onChange={setOutletLogoUrl}
+                              placeholder="https://contoh.com/logo.webp"
+                              helperText="Rekomendasi persegi 1:1 (PNG transparan / JPG / WebP)"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-2">
+                              Barcode QRIS Statis (Tampil saat pelanggan pilih QRIS di Kiosk)
+                            </label>
+                            <ImageUploadField
+                              tenantId={tenant.id}
+                              folder="qris"
+                              value={outletQrisUrl}
+                              onChange={setOutletQrisUrl}
+                              placeholder="https://contoh.com/qris.webp"
+                              helperText="Upload foto/screenshot barcode QRIS toko (resolusi tajam 1080px)"
+                            />
+                          </div>
                         </div>
                       </div>
 
-                      <div className="p-4 bg-gray-50 rounded-2xl border space-y-2 text-xs">
-                        <h4 className="font-bold text-sm text-gray-800">Struk & Keuangan</h4>
-                        <div className="flex justify-between py-1 border-b">
-                          <span className="text-gray-500">Ukuran Kertas Thermal:</span>
-                          <span className="font-bold">{tenant.receipt_config?.paper_size || "58mm"}</span>
+                      {/* ── Ringkasan Konfigurasi ── */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="p-4 bg-gray-50 rounded-2xl border space-y-2 text-xs">
+                          <h4 className="font-bold text-sm text-gray-800">Alur Bisnis & Pemesanan</h4>
+                          <div className="flex justify-between py-1 border-b">
+                            <span className="text-gray-500">Mode POS Only:</span>
+                            <span className="font-bold">{tenant.business_logic?.pos_only ? "Aktif (Standalone POS)" : "Nonaktif (Kafe Resto Normal)"}</span>
+                          </div>
+                          <div className="flex justify-between py-1 border-b">
+                            <span className="text-gray-500">Waktu Pembayaran:</span>
+                            <span className="font-bold uppercase">{tenant.business_logic?.payment_timing || "Prepaid"}</span>
+                          </div>
+                          <div className="flex justify-between py-1">
+                            <span className="text-gray-500">Mode Penomoran:</span>
+                            <span className="font-bold uppercase">{tenant.business_logic?.numbering || "Queue"}</span>
+                          </div>
                         </div>
-                        <div className="flex justify-between py-1 border-b">
-                          <span className="text-gray-500">Pajak (PPN):</span>
-                          <span className="font-bold">{tenant.finance_config?.tax_percentage || 0}%</span>
-                        </div>
-                        <div className="flex justify-between py-1">
-                          <span className="text-gray-500">Service Charge:</span>
-                          <span className="font-bold">{tenant.finance_config?.service_charge_percentage || 0}%</span>
+
+                        <div className="p-4 bg-gray-50 rounded-2xl border space-y-2 text-xs">
+                          <h4 className="font-bold text-sm text-gray-800">Struk & Keuangan</h4>
+                          <div className="flex justify-between py-1 border-b">
+                            <span className="text-gray-500">Ukuran Kertas Thermal:</span>
+                            <span className="font-bold">{tenant.receipt_config?.paper_size || "58mm"}</span>
+                          </div>
+                          <div className="flex justify-between py-1 border-b">
+                            <span className="text-gray-500">Pajak (PPN):</span>
+                            <span className="font-bold">{tenant.finance_config?.tax_percentage || 0}%</span>
+                          </div>
+                          <div className="flex justify-between py-1">
+                            <span className="text-gray-500">Service Charge:</span>
+                            <span className="font-bold">{tenant.finance_config?.service_charge_percentage || 0}%</span>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -649,9 +781,9 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
           </Form>
         </Modal>
 
-        {/* ── Modal Edit Promo & Stok Menu ── */}
+        {/* ── Modal Edit Foto, Promo & Stok Menu ── */}
         <Modal
-          title={<span className="font-bold text-base">⚙️ Pengaturan Promo & Stok Menu</span>}
+          title={<span className="font-bold text-base">⚙️ Pengaturan Foto, Promo & Stok Menu</span>}
           open={editProductModal.open}
           onCancel={() => setEditProductModal({ open: false, product: null })}
           onOk={handleSaveProductPromo}
@@ -664,6 +796,16 @@ export default function TenantAdminPage({ params }: { params: Promise<{ tenant_s
               <span className="font-bold text-gray-800 block text-sm">{editProductModal.product?.name}</span>
               <span className="text-gray-500">Harga dasar saat ini: Rp {editProductModal.product?.base_price.toLocaleString("id-ID")}</span>
             </div>
+
+            <Form.Item name="image_url" label="Foto Menu">
+              <ImageUploadField
+                tenantId={tenant.id}
+                folder="products"
+                placeholder="https://contoh.com/produk.webp"
+                helperText="Upload foto menu dari perangkat atau tempel link URL"
+                compact
+              />
+            </Form.Item>
 
             <Form.Item name="base_price" label="Harga Normal Dasar (Rp)" rules={[{ required: true, message: "Wajib diisi" }]}>
               <InputNumber className="w-full" min={0} step={1000} formatter={(val) => `${val}`.replace(/\B(?=(\d{3})+(?!\d))/g, ".")} />

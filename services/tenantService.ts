@@ -28,6 +28,16 @@ export async function createTenant(payload: Partial<Tenant>): Promise<Tenant | n
 }
 
 export async function updateTenant(id: string, payload: Partial<Tenant>): Promise<boolean> {
+    try {
+        const res = await fetch(`/api/admin/tenants/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        if (res.ok) return true;
+    } catch {
+        // Fallback ke direct client bila dipanggil di luar konteks fetch
+    }
     const { error } = await supabase.from("tenants").update(payload).eq("id", id);
     return !error;
 }

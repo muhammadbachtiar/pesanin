@@ -819,6 +819,22 @@ NOTIFY pgrst, 'reload schema';
 --   • app/[tenant_slug]/admin/page.tsx    → Portal Admin Outlet (Owner)
 --   • app/super-admin/page.tsx            → Super Admin Portal
 
+-- ── PATCH 9: Supabase Storage — bucket tenant-assets (Upload Gambar) ──────
+-- File migrasi lengkap: supabase/migrations/20261108220000_storage_tenant_assets.sql
+-- Bucket PUBLIC (read via Public URL), TANPA policy tulis → semua upload
+-- wajib lewat API route /api/upload (service_role + validasi role/tenant).
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES ('tenant-assets', 'tenant-assets', TRUE, 2097152, ARRAY['image/webp', 'image/jpeg', 'image/png'])
+ON CONFLICT (id) DO UPDATE
+SET public             = EXCLUDED.public,
+    file_size_limit    = EXCLUDED.file_size_limit,
+    allowed_mime_types = EXCLUDED.allowed_mime_types;
+--   • lib/storage.ts                → helper server (path parsing, hapus aset, pindah folder)
+--   • lib/imageCompression.ts       → kompresi WebP di browser sebelum upload
+--   • app/api/upload/route.ts       → endpoint upload/hapus aset (POST/DELETE)
+--   • components/ImageUploadField.tsx → komponen upload (drag-drop, paste, URL, preview)
+--   • app/api/tenant/[id]/branding  → Owner ubah logo & gambar QRIS outlet
+
 -- ── Verifikasi Akhir Semua Patch ─────────────────────────────────────────
 -- 1. Cek RUNNER ada:
 --    SELECT enumlabel FROM pg_enum WHERE enumtypid='user_role'::regtype ORDER BY enumsortorder;
@@ -834,4 +850,6 @@ NOTIFY pgrst, 'reload schema';
 -- 6. Cek staff_pins (RLS aktif, tanpa policy):
 --    SELECT relrowsecurity FROM pg_class WHERE relname='staff_pins'; -- hasilnya: true
 --    SELECT count(*) FROM pg_policies WHERE tablename='staff_pins'; -- hasilnya: 0
+-- 7. Cek bucket Storage tenant-assets:
+--    SELECT id, public, file_size_limit FROM storage.buckets WHERE id='tenant-assets'; -- public = true
 -- ============================================================

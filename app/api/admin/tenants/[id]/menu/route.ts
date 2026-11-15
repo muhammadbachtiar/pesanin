@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireSuperAdmin, createSupabaseAdminClient } from "@/lib/serverAuth";
+import { removeAssetsByUrl } from "@/lib/storage";
 
 export async function GET(
     _req: Request,
@@ -92,6 +93,13 @@ export async function DELETE(
     const sb = createSupabaseAdminClient();
 
     if (_type === "product") {
+        const { data: prodRow } = await sb
+            .from("products")
+            .select("image_urls")
+            .eq("id", _itemId)
+            .eq("tenant_id", id)
+            .single();
+
         const { data: groups } = await sb
             .from("product_variant_groups")
             .select("id")
@@ -104,6 +112,29 @@ export async function DELETE(
                 .in("group_id", groups.map((g) => g.id));
         }
         await sb.from("product_variant_groups").delete().eq("product_id", _itemId);
+
+        await sb.from("products").delete().eq("id", _itemId).eq("tenant_id", id);
+
+        if (prodRow && Array.isArray(prodRow.image_urls)) {
+            await removeAssetsByUrl(prodRow.image_urls);
+        }
+        return NextResponse.json({ ok: true });
+    }
+
+    if (_type === "category") {
+        const { data: catRow } = await sb
+            .from("categories")
+            .select("image_url")
+            .eq("id", _itemId)
+            .eq("tenant_id", id)
+            .single();
+
+        await sb.from("categories").delete().eq("id", _itemId).eq("tenant_id", id);
+
+        if (catRow?.image_url) {
+            await removeAssetsByUrl([catRow.image_url]);
+        }
+        return NextResponse.json({ ok: true });
     }
 
     const table = _type === "category" ? "categories" : "products";

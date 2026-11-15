@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireSuperAdmin, createSupabaseAdminClient } from "@/lib/serverAuth";
+import { relocateUnassignedAsset } from "@/lib/storage";
 
 export async function GET() {
     const { error } = await requireSuperAdmin();
@@ -29,6 +30,40 @@ export async function POST(req: Request) {
         .select()
         .single();
     if (tErr) return NextResponse.json({ error: tErr.message }, { status: 400 });
+
+    // Relokasi aset yang diupload ke _unassigned/ saat Wizard tenant baru dibuat
+    if (tenant) {
+        const updates: Record<string, unknown> = {};
+        if (tenant.logo_url) {
+            const relocatedLogo = await relocateUnassignedAsset(tenant.logo_url, tenant.id);
+            if (relocatedLogo !== tenant.logo_url) {
+                updates.logo_url = relocatedLogo;
+                tenant.logo_url = relocatedLogo;
+            }
+        }
+        if (Array.isArray(tenant.manual_payment_channels)) {
+            let channelsChanged = false;
+            const relocatedChannels = await Promise.all(
+                tenant.manual_payment_channels.map(async (ch: Record<string, unknown>) => {
+                    if (typeof ch.image_url === "string" && ch.image_url) {
+                        const nextUrl = await relocateUnassignedAsset(ch.image_url, tenant.id);
+                        if (nextUrl !== ch.image_url) {
+                            channelsChanged = true;
+                            return { ...ch, image_url: nextUrl };
+                        }
+                    }
+                    return ch;
+                })
+            );
+            if (channelsChanged) {
+                updates.manual_payment_channels = relocatedChannels;
+                tenant.manual_payment_channels = relocatedChannels;
+            }
+        }
+        if (Object.keys(updates).length > 0) {
+            await sb.from("tenants").update(updates).eq("id", tenant.id);
+        }
+    }
 
     if (ownerEmail && ownerPassword) {
         const { data: user, error: uErr } = await sb.auth.admin.createUser({
