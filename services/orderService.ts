@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { dedupeInFlight } from "@/lib/idempotency";
 import type { Order, OrderItem, OrderStatus, PaymentMethodType, VerificationStatus } from "@/types";
 
 export interface CreateOrderPayload {
@@ -36,110 +37,126 @@ export interface CreateOrderItemPayload {
 
 export async function createOrder(
     order: CreateOrderPayload,
-    items: Omit<CreateOrderItemPayload, "order_id" | "tenant_id">[]
+    items: Omit<CreateOrderItemPayload, "order_id" | "tenant_id">[],
+    idempotencyKey?: string
 ): Promise<Order | null> {
-    // ── 1. PRE-CHECK STOCK VALIDATION (Mencegah Race Condition / Overselling) ──
-    const productIds = items
-        .map((i) => i.product_id)
-        .filter((id): id is string => Boolean(id));
+    // Bangun kunci deduplikasi: gunakan idempotencyKey dari sesi checkout jika ada,
+    // atau fingerprint dari isi keranjang + tenant + meja + total agar klik ganda dalam 10 detik tertahan.
+    const itemFingerprint = items
+        .map((i) => `${i.product_id ?? i.product_name_snapshot}:${i.quantity}:${i.unit_price}:${i.notes ?? ""}`)
+        .join("|");
+    const dedupeKey = idempotencyKey
+        ? `createOrder:idem:${idempotencyKey}`
+        : `createOrder:fp:${order.tenant_id}:${order.order_type}:${order.table_number ?? ""}:${order.customer_name ?? ""}:${order.total_amount}:${itemFingerprint}`;
 
-    if (productIds.length > 0) {
-        const { data: currentProducts, error: prodErr } = await supabase
-            .from("products")
-            .select("id, name, stock_count, is_available")
-            .in("id", productIds);
+    return dedupeInFlight(
+        dedupeKey,
+        async () => {
+            // ── 1. PRE-CHECK STOCK VALIDATION (Mencegah Race Condition / Overselling) ──
+            const productIds = items
+                .map((i) => i.product_id)
+                .filter((id): id is string => Boolean(id));
 
-        if (!prodErr && currentProducts) {
-            for (const prod of currentProducts) {
-                const requestedQty = items
-                    .filter((i) => i.product_id === prod.id)
-                    .reduce((sum, i) => sum + i.quantity, 0);
+            if (productIds.length > 0) {
+                const { data: currentProducts, error: prodErr } = await supabase
+                    .from("products")
+                    .select("id, name, stock_count, is_available")
+                    .in("id", productIds);
 
-                if (!prod.is_available) {
-                    throw new Error(`Menu "${prod.name}" saat ini sedang habis.`);
-                }
+                if (!prodErr && currentProducts) {
+                    for (const prod of currentProducts) {
+                        const requestedQty = items
+                            .filter((i) => i.product_id === prod.id)
+                            .reduce((sum, i) => sum + i.quantity, 0);
 
-                if (prod.stock_count !== null && prod.stock_count < requestedQty) {
-                    if (prod.stock_count <= 0) {
-                        throw new Error(`Menu "${prod.name}" baru saja habis dipesan pelanggan lain.`);
-                    } else {
-                        throw new Error(
-                            `Menu "${prod.name}" hanya tersisa ${prod.stock_count} porsi (Anda meminta ${requestedQty}).`
-                        );
+                        if (!prod.is_available) {
+                            throw new Error(`Menu "${prod.name}" saat ini sedang habis.`);
+                        }
+
+                        if (prod.stock_count !== null && prod.stock_count < requestedQty) {
+                            if (prod.stock_count <= 0) {
+                                throw new Error(`Menu "${prod.name}" baru saja habis dipesan pelanggan lain.`);
+                            } else {
+                                throw new Error(
+                                    `Menu "${prod.name}" hanya tersisa ${prod.stock_count} porsi (Anda meminta ${requestedQty}).`
+                                );
+                            }
+                        }
                     }
                 }
             }
-        }
-    }
 
-    let finalNotes = order.customer_notes || "";
-    if (order.customer_name?.trim() && !finalNotes.includes("[NAME:")) {
-        const { cleanNotes, isServed, cookedItemIds } = parseCustomerNotes(finalNotes);
-        finalNotes = buildCustomerNotes(cleanNotes, isServed, cookedItemIds, order.customer_name);
-    }
-
-    const payloadWithNotes = {
-        ...order,
-        customer_notes: finalNotes || undefined,
-    };
-
-    let { data: orderData, error: orderError } = await supabase
-        .from("orders")
-        .insert(payloadWithNotes)
-        .select()
-        .single();
-
-    // Fallback: If 'customer_name' column is not in Supabase schema yet, retry without 'customer_name' key
-    if (orderError && (orderError.message?.includes("customer_name") || orderError.code === "PGRST204")) {
-        const { customer_name, ...payloadWithoutNameCol } = payloadWithNotes;
-        const retryResult = await supabase
-            .from("orders")
-            .insert(payloadWithoutNameCol)
-            .select()
-            .single();
-        orderData = retryResult.data;
-        orderError = retryResult.error;
-    }
-
-    if (orderError || !orderData) {
-        console.error("Error creating order:", orderError);
-        throw new Error(orderError?.message || "Gagal membuat pesanan di sistem");
-    }
-
-    const itemRows = items.map((i) => ({
-        ...i,
-        order_id: orderData.id,
-        tenant_id: order.tenant_id,
-    }));
-    await supabase.from("order_items").insert(itemRows);
-
-    // ── 2. AUTO-DEDUCT STOCK ──────────────────────────────────────────────
-    // Kurangi stock_count per produk yang memiliki kuota stok terbatas.
-    // Jika stok mencapai 0, otomatis set is_available = false.
-    if (productIds.length > 0) {
-        const { data: stockRows } = await supabase
-            .from("products")
-            .select("id, stock_count, is_available")
-            .in("id", productIds);
-
-        if (stockRows) {
-            for (const row of stockRows) {
-                if (row.stock_count === null) continue; // unlimited — skip
-                const ordered = items
-                    .filter((i) => i.product_id === row.id)
-                    .reduce((sum, i) => sum + i.quantity, 0);
-                const newStock = Math.max(0, (row.stock_count as number) - ordered);
-                const shouldDeactivate = newStock <= 0;
-                await supabase.from("products").update({
-                    stock_count: newStock,
-                    ...(shouldDeactivate ? { is_available: false } : {}),
-                }).eq("id", row.id);
+            let finalNotes = order.customer_notes || "";
+            if (order.customer_name?.trim() && !finalNotes.includes("[NAME:")) {
+                const { cleanNotes, isServed, cookedItemIds } = parseCustomerNotes(finalNotes);
+                finalNotes = buildCustomerNotes(cleanNotes, isServed, cookedItemIds, order.customer_name);
             }
-        }
-    }
-    // ── END AUTO-DEDUCT ───────────────────────────────────────────────────
 
-    return orderData as Order;
+            const payloadWithNotes = {
+                ...order,
+                customer_notes: finalNotes || undefined,
+            };
+
+            let { data: orderData, error: orderError } = await supabase
+                .from("orders")
+                .insert(payloadWithNotes)
+                .select()
+                .single();
+
+            // Fallback: If 'customer_name' column is not in Supabase schema yet, retry without 'customer_name' key
+            if (orderError && (orderError.message?.includes("customer_name") || orderError.code === "PGRST204")) {
+                const { customer_name, ...payloadWithoutNameCol } = payloadWithNotes;
+                const retryResult = await supabase
+                    .from("orders")
+                    .insert(payloadWithoutNameCol)
+                    .select()
+                    .single();
+                orderData = retryResult.data;
+                orderError = retryResult.error;
+            }
+
+            if (orderError || !orderData) {
+                console.error("Error creating order:", orderError);
+                throw new Error(orderError?.message || "Gagal membuat pesanan di sistem");
+            }
+
+            const itemRows = items.map((i) => ({
+                ...i,
+                order_id: orderData.id,
+                tenant_id: order.tenant_id,
+            }));
+            await supabase.from("order_items").insert(itemRows);
+
+            // ── 2. AUTO-DEDUCT STOCK ──────────────────────────────────────────────
+            // Kurangi stock_count per produk yang memiliki kuota stok terbatas.
+            // Jika stok mencapai 0, otomatis set is_available = false.
+            if (productIds.length > 0) {
+                const { data: stockRows } = await supabase
+                    .from("products")
+                    .select("id, stock_count, is_available")
+                    .in("id", productIds);
+
+                if (stockRows) {
+                    for (const row of stockRows) {
+                        if (row.stock_count === null) continue; // unlimited — skip
+                        const ordered = items
+                            .filter((i) => i.product_id === row.id)
+                            .reduce((sum, i) => sum + i.quantity, 0);
+                        const newStock = Math.max(0, (row.stock_count as number) - ordered);
+                        const shouldDeactivate = newStock <= 0;
+                        await supabase.from("products").update({
+                            stock_count: newStock,
+                            ...(shouldDeactivate ? { is_available: false } : {}),
+                        }).eq("id", row.id);
+                    }
+                }
+            }
+            // ── END AUTO-DEDUCT ───────────────────────────────────────────────────
+
+            return orderData as Order;
+        },
+        idempotencyKey ? 30_000 : 8_000
+    );
 }
 
 export async function getOrdersByTenant(
@@ -193,11 +210,13 @@ export async function updateOrderStatus(
     orderId: string,
     status: OrderStatus
 ): Promise<boolean> {
-    const { error } = await supabase
-        .from("orders")
-        .update({ order_status: status })
-        .eq("id", orderId);
-    return !error;
+    return dedupeInFlight(`updateStatus:${orderId}:${status}`, async () => {
+        const { error } = await supabase
+            .from("orders")
+            .update({ order_status: status })
+            .eq("id", orderId);
+        return !error;
+    });
 }
 
 export async function markOrderPaid(
@@ -206,56 +225,71 @@ export async function markOrderPaid(
     verifiedByProfileId: string,
     targetOrderStatus?: OrderStatus
 ): Promise<boolean> {
-    const { data: existing } = await supabase
-        .from("orders")
-        .select("order_status")
-        .eq("id", orderId)
-        .single();
+    return dedupeInFlight(
+        `markPaid:${orderId}`,
+        async () => {
+            const { data: existing } = await supabase
+                .from("orders")
+                .select("order_status, payment_status")
+                .eq("id", orderId)
+                .single();
 
-    const newStatus = targetOrderStatus
-        ? targetOrderStatus
-        : existing?.order_status === "pending"
-        ? "cooking"
-        : existing?.order_status ?? "cooking";
+            // Jika sudah paid sebelumnya (mis. retry karena sinyal putus), jangan timpa ulang
+            if (existing?.payment_status === "paid" && (!targetOrderStatus || existing?.order_status === targetOrderStatus)) {
+                return true;
+            }
 
-    const { error } = await supabase.from("orders").update({
-        payment_status: "paid",
-        payment_method: method,
-        verification_status: "verified",
-        verified_by: verifiedByProfileId,
-        verified_at: new Date().toISOString(),
-        order_status: newStatus,
-    }).eq("id", orderId);
-    return !error;
+            const newStatus = targetOrderStatus
+                ? targetOrderStatus
+                : existing?.order_status === "pending"
+                ? "cooking"
+                : existing?.order_status ?? "cooking";
+
+            const { error } = await supabase.from("orders").update({
+                payment_status: "paid",
+                payment_method: method,
+                verification_status: "verified",
+                verified_by: verifiedByProfileId,
+                verified_at: new Date().toISOString(),
+                order_status: newStatus,
+            }).eq("id", orderId);
+            return !error;
+        },
+        5_000
+    );
 }
 
 export async function markOrderServed(
     orderId: string,
     currentNotes?: string | null
 ): Promise<boolean> {
-    const newNotes = currentNotes
-        ? currentNotes.includes("[SERVED]")
-            ? currentNotes
-            : `${currentNotes} [SERVED]`
-        : "[SERVED]";
-    const { error } = await supabase
-        .from("orders")
-        .update({ customer_notes: newNotes })
-        .eq("id", orderId);
-    return !error;
+    return dedupeInFlight(`markServed:${orderId}`, async () => {
+        const newNotes = currentNotes
+            ? currentNotes.includes("[SERVED]")
+                ? currentNotes
+                : `${currentNotes} [SERVED]`
+            : "[SERVED]";
+        const { error } = await supabase
+            .from("orders")
+            .update({ customer_notes: newNotes })
+            .eq("id", orderId);
+        return !error;
+    });
 }
 
 export async function approveOrder(
     orderId: string,
     cashierProfileId: string
 ): Promise<boolean> {
-    const { error } = await supabase.from("orders").update({
-        verification_status: "verified",
-        verified_by: cashierProfileId,
-        verified_at: new Date().toISOString(),
-        order_status: "cooking",
-    }).eq("id", orderId);
-    return !error;
+    return dedupeInFlight(`approve:${orderId}`, async () => {
+        const { error } = await supabase.from("orders").update({
+            verification_status: "verified",
+            verified_by: cashierProfileId,
+            verified_at: new Date().toISOString(),
+            order_status: "cooking",
+        }).eq("id", orderId);
+        return !error;
+    });
 }
 
 export async function voidOrder(
@@ -263,53 +297,81 @@ export async function voidOrder(
     reason: string,
     cashierProfileId?: string | null
 ): Promise<boolean> {
-    // ── AUTO-RESTORE STOCK (Fase 1 / Opsi 1A) ────────────────────────────
-    // Ambil order_items sebelum di-cancel, kembalikan stok ke masing-masing produk.
-    const { data: orderItems } = await supabase
-        .from("order_items")
-        .select("product_id, quantity")
-        .eq("order_id", orderId);
+    return dedupeInFlight(
+        `void:${orderId}`,
+        async () => {
+            // ── 0. IDEMPOTENCY GUARD: Klaim pembatalan terlebih dahulu ──────────
+            // Hanya ubah status ke 'cancelled' jika saat ini BELUM 'cancelled'.
+            // Mencegah pengembalian stok 2x lipat jika tombol Void ditekan ganda
+            // atau terpanggil bersamaan dengan autoCancelStalePendingOrders.
+            const isValidUuid =
+                cashierProfileId &&
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cashierProfileId);
 
-    if (orderItems && orderItems.length > 0) {
-        const productIds = (orderItems as { product_id: string | null; quantity: number }[])
-            .map((i) => i.product_id)
-            .filter((id): id is string => Boolean(id));
+            const { data: claimedRows, error: claimError } = await supabase
+                .from("orders")
+                .update({
+                    order_status: "cancelled",
+                    verification_status: "rejected",
+                    void_reason: reason,
+                    voided_by: isValidUuid ? cashierProfileId : null,
+                    voided_at: new Date().toISOString(),
+                })
+                .eq("id", orderId)
+                .neq("order_status", "cancelled")
+                .select("id");
 
-        if (productIds.length > 0) {
-            const { data: stockRows } = await supabase
-                .from("products")
-                .select("id, stock_count, is_available")
-                .in("id", productIds);
+            if (claimError) {
+                console.error("voidOrder claim error:", claimError);
+                return false;
+            }
 
-            if (stockRows) {
-                for (const row of stockRows as { id: string; stock_count: number | null; is_available: boolean }[]) {
-                    if (row.stock_count === null) continue; // unlimited — skip
-                    const returned = (orderItems as { product_id: string | null; quantity: number }[])
-                        .filter((i) => i.product_id === row.id)
-                        .reduce((sum: number, i: { product_id: string | null; quantity: number }) => sum + i.quantity, 0);
-                    const newStock = row.stock_count + returned;
-                    // Aktifkan kembali produk jika sebelumnya nonaktif karena stok habis
-                    const shouldReactivate = !row.is_available && newStock > 0;
-                    await supabase.from("products").update({
-                        stock_count: newStock,
-                        ...(shouldReactivate ? { is_available: true } : {}),
-                    }).eq("id", row.id);
+            // Jika tidak ada baris yang di-update, berarti pesanan sudah berstatus 'cancelled' sebelumnya.
+            // Kembalikan true tanpa mengembalikan stok untuk kedua kalinya.
+            if (!claimedRows || claimedRows.length === 0) {
+                return true;
+            }
+
+            // ── 1. AUTO-RESTORE STOCK (Hanya dieksekusi tepat 1x saat klaim berhasil) ─
+            const { data: orderItems } = await supabase
+                .from("order_items")
+                .select("product_id, quantity")
+                .eq("order_id", orderId);
+
+            if (orderItems && orderItems.length > 0) {
+                const productIds = (orderItems as { product_id: string | null; quantity: number }[])
+                    .map((i) => i.product_id)
+                    .filter((id): id is string => Boolean(id));
+
+                if (productIds.length > 0) {
+                    const { data: stockRows } = await supabase
+                        .from("products")
+                        .select("id, stock_count, is_available")
+                        .in("id", productIds);
+
+                    if (stockRows) {
+                        for (const row of stockRows as { id: string; stock_count: number | null; is_available: boolean }[]) {
+                            if (row.stock_count === null) continue; // unlimited — skip
+                            const returned = (orderItems as { product_id: string | null; quantity: number }[])
+                                .filter((i) => i.product_id === row.id)
+                                .reduce((sum: number, i: { product_id: string | null; quantity: number }) => sum + i.quantity, 0);
+                            const newStock = row.stock_count + returned;
+                            // Aktifkan kembali produk jika sebelumnya nonaktif karena stok habis
+                            const shouldReactivate = !row.is_available && newStock > 0;
+                            await supabase.from("products").update({
+                                stock_count: newStock,
+                                ...(shouldReactivate ? { is_available: true } : {}),
+                            }).eq("id", row.id);
+                        }
+                    }
                 }
             }
-        }
-    }
-    // ── END AUTO-RESTORE ─────────────────────────────────────────────────
+            // ── END AUTO-RESTORE ─────────────────────────────────────────────────
 
-    const isValidUuid = cashierProfileId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cashierProfileId);
-
-    const { error } = await supabase.from("orders").update({
-        order_status: "cancelled",
-        verification_status: "rejected",
-        void_reason: reason,
-        voided_by: isValidUuid ? cashierProfileId : null,
-        voided_at: new Date().toISOString(),
-    }).eq("id", orderId);
-    return !error;
+            return true;
+        },
+        10_000
+    );
 }
 
 export async function generateQueueNumber(tenantId: string): Promise<string> {
@@ -350,6 +412,9 @@ export function buildCustomerNotes(cleanNotes: string, isServed: boolean, cooked
     return parts.join(" ").trim();
 }
 
+// Antrian serial per orderId agar tap cepat pada checklist dapur tidak saling menimpa (out-of-order)
+const cookedItemsChain = new Map<string, Promise<boolean>>();
+
 export async function updateOrderCookedItems(
     orderId: string,
     notesSnapshot: string | null,
@@ -357,11 +422,20 @@ export async function updateOrderCookedItems(
 ): Promise<boolean> {
     const { cleanNotes, isServed, customerName } = parseCustomerNotes(notesSnapshot);
     const newNotes = buildCustomerNotes(cleanNotes, isServed, cookedItemIds, customerName);
-    const { error } = await supabase
-        .from("orders")
-        .update({ customer_notes: newNotes || null })
-        .eq("id", orderId);
-    return !error;
+
+    const prev = cookedItemsChain.get(orderId) ?? Promise.resolve(true);
+    const next = prev
+        .catch(() => true)
+        .then(async () => {
+            const { error } = await supabase
+                .from("orders")
+                .update({ customer_notes: newNotes || null })
+                .eq("id", orderId);
+            return !error;
+        });
+
+    cookedItemsChain.set(orderId, next);
+    return next;
 }
 
 export async function getActiveOrderByTable(
@@ -391,19 +465,20 @@ export async function getActiveOrderByTable(
 }
 
 /**
- * Membersihkan pesanan pending gantung dari hari-hari sebelumnya secara otomatis.
- * Mengubah status menjadi 'cancelled' (void) dan mengembalikan stok produk jika ada.
+ * Membersihkan pesanan pending (belum lunas) yang tidak kunjung dikonfirmasi
+ * setelah melewati batas waktu 30 menit secara otomatis.
+ * Mengubah status menjadi 'cancelled' (void) dan mengembalikan stok produk ke semula.
  */
-export async function autoCancelStalePendingOrders(tenantId: string): Promise<number> {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+export async function autoCancelStalePendingOrders(tenantId: string, maxAgeMinutes = 30): Promise<number> {
+    const cutoffIso = new Date(Date.now() - maxAgeMinutes * 60 * 1000).toISOString();
 
     const { data: staleOrders, error } = await supabase
         .from("orders")
         .select("id, queue_number")
         .eq("tenant_id", tenantId)
         .eq("order_status", "pending")
-        .lt("created_at", startOfToday.toISOString());
+        .eq("payment_status", "unpaid")
+        .lt("created_at", cutoffIso);
 
     if (error || !staleOrders || staleOrders.length === 0) return 0;
 
@@ -411,7 +486,7 @@ export async function autoCancelStalePendingOrders(tenantId: string): Promise<nu
     for (const ord of staleOrders) {
         const ok = await voidOrder(
             ord.id,
-            "Dibatalkan otomatis: Melewati batas hari operasional (Kadaluarsa)",
+            `Dibatalkan otomatis: Tidak dikonfirmasi/dilunasi dalam ${maxAgeMinutes} menit`,
             null
         );
         if (ok) count++;

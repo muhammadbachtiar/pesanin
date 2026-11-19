@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { dedupeInFlight } from "@/lib/idempotency";
 import type { Category, Product, ProductVariantGroup } from "@/types";
 
 export async function getCategoriesWithProducts(tenantId: string): Promise<Category[]> {
@@ -39,22 +40,28 @@ export async function toggleProductAvailability(
     isAvailable: boolean,
     stockCount?: number | null
 ): Promise<boolean> {
-    const payload: Record<string, unknown> = { is_available: isAvailable };
-    if (stockCount !== undefined) payload.stock_count = stockCount;
-    const { error } = await supabase.from("products").update(payload).eq("id", productId);
-    return !error;
+    const key = `toggleProduct:${productId}:${isAvailable}:${stockCount ?? ""}`;
+    return dedupeInFlight(key, async () => {
+        const payload: Record<string, unknown> = { is_available: isAvailable };
+        if (stockCount !== undefined) payload.stock_count = stockCount;
+        const { error } = await supabase.from("products").update(payload).eq("id", productId);
+        return !error;
+    });
 }
 
 export async function updateProduct(
     productId: string,
     updates: Partial<Omit<Product, "id" | "tenant_id">>
 ): Promise<{ success: boolean; error?: string }> {
-    const { error } = await supabase.from("products").update(updates).eq("id", productId);
-    if (error) {
-        console.error("updateProduct error:", error);
-        return { success: false, error: error.message };
-    }
-    return { success: true };
+    const key = `updateProduct:${productId}:${JSON.stringify(updates)}`;
+    return dedupeInFlight(key, async () => {
+        const { error } = await supabase.from("products").update(updates).eq("id", productId);
+        if (error) {
+            console.error("updateProduct error:", error);
+            return { success: false, error: error.message };
+        }
+        return { success: true };
+    });
 }
 
 export async function getAllProductsByTenant(tenantId: string): Promise<Product[]> {

@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { requireSuperAdmin, requireTenantAccess, createSupabaseAdminClient } from "@/lib/serverAuth";
 import { removeTenantAssets } from "@/lib/storage";
 
+/**
+ * Field yang boleh diubah oleh OWNER outlet.
+ * Slug, status aktif (suspend), dan alur bisnis (business_logic) hanya boleh diubah SUPER_ADMIN.
+ */
+const OWNER_EDITABLE_FIELDS = ["logo_url", "manual_payment_channels", "finance_config", "receipt_config"] as const;
+
 export async function PATCH(
     req: Request,
     { params }: { params: Promise<{ id: string }> }
@@ -14,7 +20,19 @@ export async function PATCH(
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const body = await req.json();
+    const rawBody = (await req.json()) as Record<string, unknown>;
+    let body: Record<string, unknown> = rawBody;
+
+    if (profile.role === "OWNER") {
+        body = {};
+        for (const key of OWNER_EDITABLE_FIELDS) {
+            if (key in rawBody) body[key] = rawBody[key];
+        }
+        if (Object.keys(body).length === 0) {
+            return NextResponse.json({ error: "Tidak ada field yang boleh diubah oleh Owner." }, { status: 403 });
+        }
+    }
+
     const sb = createSupabaseAdminClient();
 
     const { error: dbErr } = await sb.from("tenants").update(body).eq("id", id);

@@ -70,10 +70,12 @@ export default function ImageUploadField({
   const [previewOpen, setPreviewOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const busyRef = useRef(false);
   const preset = FOLDER_COMPRESSION_PRESETS[folder];
 
   const handleFileProcess = useCallback(
     async (rawFile: File) => {
+      if (busyRef.current) return;
       setErrorMsg(null);
       setImgLoadError(false);
 
@@ -89,6 +91,7 @@ export default function ImageUploadField({
         return;
       }
 
+      busyRef.current = true;
       try {
         setStage("compressing");
         const compressed = await compressImageToWebP(rawFile, folder);
@@ -125,6 +128,7 @@ export default function ImageUploadField({
         const msg = err instanceof Error ? err.message : "Terjadi kesalahan saat memproses gambar.";
         setErrorMsg(msg);
       } finally {
+        busyRef.current = false;
         setStage("idle");
         if (fileInputRef.current) {
           fileInputRef.current.value = "";
@@ -135,22 +139,26 @@ export default function ImageUploadField({
   );
 
   const handleRemove = async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setErrorMsg(null);
     setStats(null);
     setImgLoadError(false);
     const oldUrl = currentUrl;
     onChange?.("");
 
-    if (oldUrl && isManagedAssetUrl(oldUrl)) {
-      try {
+    try {
+      if (oldUrl && isManagedAssetUrl(oldUrl)) {
         await fetch("/api/upload", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ url: oldUrl }),
         });
-      } catch {
-        // Non-blocking cleanup
       }
+    } catch {
+      // Non-blocking cleanup
+    } finally {
+      busyRef.current = false;
     }
   };
 

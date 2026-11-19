@@ -26,6 +26,7 @@ export default function RunnerPage({ params }: { params: Promise<{ tenant_slug: 
 
   // Track action loading state per order
   const [loadingStates, setLoadingStates] = useState<Record<string, boolean>>({});
+  const servingRef = useRef<Record<string, boolean>>({});
   // Track temporary undo queue for recently served orders (5-second grace period)
   const [undoQueue, setUndoQueue] = useState<Record<string, boolean>>({});
   const undoTimers = useRef<Record<string, NodeJS.Timeout>>({});
@@ -134,12 +135,15 @@ export default function RunnerPage({ params }: { params: Promise<{ tenant_slug: 
   }, []);
 
   const handleServeClick = useCallback(async (order: Order) => {
+    if (servingRef.current[order.id] || undoTimers.current[order.id]) return;
+
     // Unpaid takeaway orders cannot be completed by runner directly
     if (order.order_type === "takeaway" && order.payment_status !== "paid") {
       alert("⚠️ Pesanan Takeaway ini belum lunas! Pelanggan wajib melakukan pembayaran di Kasir terlebih dahulu.");
       return;
     }
 
+    servingRef.current[order.id] = true;
     setLoadingStates((prev) => ({ ...prev, [order.id]: true }));
     setUndoQueue((prev) => ({ ...prev, [order.id]: true }));
 
@@ -167,6 +171,7 @@ export default function RunnerPage({ params }: { params: Promise<{ tenant_slug: 
       } catch (err) {
         console.error("Failed to serve order:", err);
       } finally {
+        servingRef.current[order.id] = false;
         setLoadingStates((prev) => ({ ...prev, [order.id]: false }));
       }
     }, 5000);
@@ -179,6 +184,7 @@ export default function RunnerPage({ params }: { params: Promise<{ tenant_slug: 
     if (undoTimers.current[order.id]) {
       clearTimeout(undoTimers.current[order.id]);
       delete undoTimers.current[order.id];
+      servingRef.current[order.id] = false;
       setUndoQueue((prev) => {
         const next = { ...prev };
         delete next[order.id];

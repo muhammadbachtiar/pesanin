@@ -24,6 +24,19 @@ export async function POST(req: Request) {
     const { ownerEmail, ownerPassword, ownerName, ...tenantPayload } = body;
 
     const sb = createSupabaseAdminClient();
+    if (tenantPayload.slug) {
+        const fifteenSecondsAgo = new Date(Date.now() - 15_000).toISOString();
+        const { data: recentTenant } = await sb
+            .from("tenants")
+            .select("*")
+            .eq("slug", tenantPayload.slug)
+            .gte("created_at", fifteenSecondsAgo)
+            .maybeSingle();
+        if (recentTenant) {
+            return NextResponse.json(recentTenant);
+        }
+    }
+
     const { data: tenant, error: tErr } = await sb
         .from("tenants")
         .insert(tenantPayload)

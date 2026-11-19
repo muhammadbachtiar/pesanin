@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { dedupeInFlight } from "@/lib/idempotency";
 import type { Tenant } from "@/types";
 
 export async function getTenantBySlug(slug: string): Promise<Tenant | null> {
@@ -22,22 +23,34 @@ export async function getAllTenants(): Promise<Tenant[]> {
 }
 
 export async function createTenant(payload: Partial<Tenant>): Promise<Tenant | null> {
-    const { data, error } = await supabase.from("tenants").insert(payload).select().single();
-    if (error || !data) return null;
-    return data as Tenant;
+    const key = `createTenant:${payload.slug ?? payload.name ?? ""}`;
+    return dedupeInFlight(
+        key,
+        async () => {
+            const { data, error } = await supabase.from("tenants").insert(payload).select().single();
+            if (error || !data) return null;
+            return data as Tenant;
+        },
+        5_000
+    );
 }
 
 export async function updateTenant(id: string, payload: Partial<Tenant>): Promise<boolean> {
-    try {
-        const res = await fetch(`/api/admin/tenants/${id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-        });
-        if (res.ok) return true;
-    } catch {
-        // Fallback ke direct client bila dipanggil di luar konteks fetch
-    }
-    const { error } = await supabase.from("tenants").update(payload).eq("id", id);
-    return !error;
+    const key = `updateTenant:${id}:${JSON.stringify(payload)}`;
+    return dedupeInFlight(key, async () => {
+        try {
+            const res = await fetch(`/api/admin/tenants/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            // Jangan fallback ke direct client bila server menolak (403/400),
+            // agar whitelist field Owner di server tidak bisa dilewati.
+            return res.ok;
+        } catch {
+            // Fallback ke direct client hanya bila fetch tidak tersedia (mis. dipanggil di luar browser)
+        }
+        const { error } = await supabase.from("tenants").update(payload).eq("id", id);
+        return !error;
+    });
 }

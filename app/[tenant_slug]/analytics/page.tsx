@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Table, Tag, DatePicker, Button, Tabs, Modal, Spin, Input, message } from "antd";
 import dayjs, { Dayjs } from "dayjs";
 import { getTenantBySlug } from "@/services/tenantService";
 import { getOrdersForAnalytics, getOrderById, voidOrder, autoCancelStalePendingOrders } from "@/services/orderService";
 import { getCurrentProfile } from "@/services/authService";
+import { TenantRoleGuard } from "@/components/auth/TenantRoleGuard";
 import type { Tenant, Order, Profile } from "@/types";
 
 const { RangePicker } = DatePicker;
@@ -129,6 +130,7 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
   const [voidModal, setVoidModal] = useState<{ open: boolean; order: Order | null }>({ open: false, order: null });
   const [voidReason, setVoidReason] = useState("");
   const [voidLoading, setVoidLoading] = useState(false);
+  const voidLockRef = useRef(false);
 
   useEffect(() => {
     async function init() {
@@ -170,12 +172,13 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
   const avgOrder = completed.length ? Math.round(revenue / completed.length) : 0;
 
   const handleVoidSubmit = async () => {
-    if (!voidModal.order) return;
+    if (!voidModal.order || voidLoading || voidLockRef.current) return;
     const trimmedReason = voidReason.trim();
     if (!trimmedReason) {
       message.warning("Harap isi alasan pembatalan.");
       return;
     }
+    voidLockRef.current = true;
     setVoidLoading(true);
     try {
       const ok = await voidOrder(voidModal.order.id, trimmedReason, profile?.id ?? null);
@@ -194,6 +197,7 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
       console.error("Error voiding order:", err);
       message.error("Terjadi kesalahan saat membatalkan pesanan.");
     } finally {
+      voidLockRef.current = false;
       setVoidLoading(false);
     }
   };
@@ -272,11 +276,11 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
           >
             Detail
           </button>
-          {(r.order_status === "pending" || r.order_status === "cooking" || r.order_status === "ready") && (
+          {r.order_status !== "cancelled" && (
             <button
               onClick={() => {
                 setVoidModal({ open: true, order: r });
-                setVoidReason("Dibatalkan dari riwayat analitik");
+                setVoidReason("Dibatalkan oleh Owner dari riwayat analitik");
               }}
               className="text-xs font-semibold px-2 py-1 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors cursor-pointer"
             >
@@ -291,16 +295,27 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
   if (!tenant) return <div className="p-8 text-gray-400">Loading...</div>;
 
   return (
+    <TenantRoleGuard
+      tenantSlug={tenant.slug}
+      tenantId={tenant.id}
+      isPosOnly={tenant.business_logic?.pos_only ?? false}
+      allowedRoles={["OWNER", "SUPER_ADMIN"]}
+    >
     <div style={{ minHeight: "100vh", background: "#f1f5f9", fontFamily: "Inter, sans-serif" }}>
       {/* Header */}
       <header className="px-6 py-4 flex items-center justify-between shadow-md" style={{ background: "var(--tenant-primary)" }}>
         <div>
           <h1 className="text-white font-bold text-xl leading-none">{tenant.name}</h1>
-          <p className="text-white/70 text-sm mt-0.5">Analitik &amp; Riwayat Revenue</p>
+          <p className="text-white/70 text-sm mt-0.5">Analitik &amp; Riwayat Revenue (Khusus Owner)</p>
         </div>
-        <a href={`/${(tenant as unknown as { slug: string }).slug ?? ""}/cashier`} className="text-white/80 text-sm hover:text-white transition-colors">
-          ← Kembali ke Kasir
-        </a>
+        <div className="flex items-center gap-3">
+          <a href={`/${tenant.slug}/admin`} className="text-white text-xs font-bold bg-white/15 hover:bg-white/25 px-3 py-1.5 rounded-xl transition-colors">
+            ⚙️ Portal Admin
+          </a>
+          <a href={`/${tenant.slug}/cashier`} className="text-white/85 text-sm hover:text-white transition-colors">
+            ← Kembali ke Kasir
+          </a>
+        </div>
       </header>
 
       <div className="max-w-7xl mx-auto p-4 md:p-6 space-y-5">
@@ -480,13 +495,13 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
             )}
 
             {/* Void button inside modal */}
-            {(selectedOrder.order_status === "pending" || selectedOrder.order_status === "cooking" || selectedOrder.order_status === "ready") && (
+            {selectedOrder.order_status !== "cancelled" && (
               <div className="pt-2 border-t flex justify-end">
                 <Button
                   danger
                   onClick={() => {
                     setVoidModal({ open: true, order: selectedOrder });
-                    setVoidReason("Dibatalkan dari detail riwayat analitik");
+                    setVoidReason("Dibatalkan oleh Owner dari detail riwayat analitik");
                   }}
                 >
                   Batalkan Pesanan (Void)
@@ -526,5 +541,6 @@ export default function AnalyticsPage({ params }: { params: Promise<{ tenant_slu
         </div>
       </Modal>
     </div>
+    </TenantRoleGuard>
   );
 }

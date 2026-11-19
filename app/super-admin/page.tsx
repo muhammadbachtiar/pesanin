@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Table, Button, Modal, Form, Input, Select, Switch, Tag,
   Tooltip, message, Divider, Card, Statistic, Row, Col,
@@ -77,6 +77,10 @@ export default function SuperAdminPage() {
   const [prodModalOpen, setProdModalOpen] = useState(false);
   const [editingCat, setEditingCat] = useState<Category | null>(null);
   const [editingProd, setEditingProd] = useState<Product | null>(null);
+  const [catSaving, setCatSaving] = useState(false);
+  const [prodSaving, setProdSaving] = useState(false);
+  const [togglingTenantMap, setTogglingTenantMap] = useState<Record<string, boolean>>({});
+  const lockRef = useRef<Record<string, boolean>>({});
 
   useEffect(() => {
     if (catModalOpen) {
@@ -142,42 +146,62 @@ export default function SuperAdminPage() {
   }, [tenants]);
 
   const handleCreateStaff = async (values: { email: string; password: string; fullName: string; role: UserRole; tenantId: string }) => {
+    if (staffSaving || lockRef.current["createStaff"]) return;
+    lockRef.current["createStaff"] = true;
     setStaffSaving(true);
-    const result = await createStaffAccount({
-      email: values.email,
-      password: values.password,
-      fullName: values.fullName,
-      role: values.role,
-      tenantId: values.tenantId || null,
-    });
-    setStaffSaving(false);
-    if (!result.success) {
-      message.error(result.error ?? "Gagal membuat akun");
-      return;
+    try {
+      const result = await createStaffAccount({
+        email: values.email,
+        password: values.password,
+        fullName: values.fullName,
+        role: values.role,
+        tenantId: values.tenantId || null,
+      });
+      if (!result.success) {
+        message.error(result.error ?? "Gagal membuat akun");
+        return;
+      }
+      message.success("Akun staf berhasil dibuat!");
+      setStaffModalOpen(false);
+      staffForm.resetFields();
+      await loadStaff(staffTenantFilter);
+    } finally {
+      lockRef.current["createStaff"] = false;
+      setStaffSaving(false);
     }
-    message.success("Akun staf berhasil dibuat!");
-    setStaffModalOpen(false);
-    staffForm.resetFields();
-    await loadStaff(staffTenantFilter);
   };
 
   const handleToggleStaff = async (profileId: string, currentActive: boolean) => {
-    const ok = await toggleStaffActive(profileId, !currentActive);
-    if (ok) {
-      message.success(`Status akun staf berhasil ${!currentActive ? "diaktifkan" : "dinonaktifkan"}`);
-      await loadStaff(staffTenantFilter);
-    } else {
-      message.error("Gagal mengubah status akun");
+    const key = `toggleStaff:${profileId}`;
+    if (lockRef.current[key]) return;
+    lockRef.current[key] = true;
+    try {
+      const ok = await toggleStaffActive(profileId, !currentActive);
+      if (ok) {
+        message.success(`Status akun staf berhasil ${!currentActive ? "diaktifkan" : "dinonaktifkan"}`);
+        await loadStaff(staffTenantFilter);
+      } else {
+        message.error("Gagal mengubah status akun");
+      }
+    } finally {
+      lockRef.current[key] = false;
     }
   };
 
   const handleDeleteStaff = async (profileId: string) => {
-    const ok = await deleteStaffAccount(profileId);
-    if (ok) {
-      message.success("Akun staf berhasil dihapus permanen");
-      await loadStaff(staffTenantFilter);
-    } else {
-      message.error("Gagal menghapus akun staf");
+    const key = `deleteStaff:${profileId}`;
+    if (lockRef.current[key]) return;
+    lockRef.current[key] = true;
+    try {
+      const ok = await deleteStaffAccount(profileId);
+      if (ok) {
+        message.success("Akun staf berhasil dihapus permanen");
+        await loadStaff(staffTenantFilter);
+      } else {
+        message.error("Gagal menghapus akun staf");
+      }
+    } finally {
+      lockRef.current[key] = false;
     }
   };
   // ─────────────────────────────────────────────────────────────────────
@@ -270,39 +294,61 @@ export default function SuperAdminPage() {
   });
 
   const handleSubmit = async () => {
+    if (saving || lockRef.current["wizardSubmit"]) return;
+    lockRef.current["wizardSubmit"] = true;
     setSaving(true);
-    const d = wizardData;
-    if (editingTenant) {
-      const ok = await updateTenant(editingTenant.id, buildPayload(d));
-      if (ok) { message.success("Tenant diupdate"); setWizardOpen(false); refresh(); }
-      else message.error("Gagal update");
-    } else {
-      const res = await fetch("/api/admin/tenants", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...buildPayload(d), ownerEmail: d.owner_email, ownerPassword: d.owner_password, ownerName: d.owner_name }),
-      });
-      const result = await res.json();
-      if (res.ok || res.status === 207) {
-        message.success(`Tenant "${result.name}" berhasil dibuat!`);
-        if (res.status === 207) message.warning("Tenant dibuat tapi ada masalah membuat akun owner.");
-        setWizardOpen(false); refresh();
+    try {
+      const d = wizardData;
+      if (editingTenant) {
+        const ok = await updateTenant(editingTenant.id, buildPayload(d));
+        if (ok) { message.success("Tenant diupdate"); setWizardOpen(false); refresh(); }
+        else message.error("Gagal update");
       } else {
-        message.error(result.error ?? "Gagal membuat tenant");
+        const res = await fetch("/api/admin/tenants", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...buildPayload(d), ownerEmail: d.owner_email, ownerPassword: d.owner_password, ownerName: d.owner_name }),
+        });
+        const result = await res.json();
+        if (res.ok || res.status === 207) {
+          message.success(`Tenant "${result.name}" berhasil dibuat!`);
+          if (res.status === 207) message.warning("Tenant dibuat tapi ada masalah membuat akun owner.");
+          setWizardOpen(false); refresh();
+        } else {
+          message.error(result.error ?? "Gagal membuat tenant");
+        }
       }
+    } finally {
+      lockRef.current["wizardSubmit"] = false;
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch(`/api/admin/tenants/${id}`, { method: "DELETE" });
-    if (res.ok) { message.success("Tenant dihapus"); refresh(); }
-    else message.error("Gagal menghapus tenant");
+    const key = `deleteTenant:${id}`;
+    if (lockRef.current[key]) return;
+    lockRef.current[key] = true;
+    try {
+      const res = await fetch(`/api/admin/tenants/${id}`, { method: "DELETE" });
+      if (res.ok) { message.success("Tenant dihapus"); refresh(); }
+      else message.error("Gagal menghapus tenant");
+    } finally {
+      lockRef.current[key] = false;
+    }
   };
 
   const toggleActive = async (t: Tenant) => {
-    await fetch(`/api/admin/tenants/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_active: !t.is_active }) });
-    refresh();
+    const key = `toggleTenant:${t.id}`;
+    if (lockRef.current[key]) return;
+    lockRef.current[key] = true;
+    setTogglingTenantMap((prev) => ({ ...prev, [t.id]: true }));
+    try {
+      await fetch(`/api/admin/tenants/${t.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_active: !t.is_active }) });
+      await refresh();
+    } finally {
+      lockRef.current[key] = false;
+      setTogglingTenantMap((prev) => ({ ...prev, [t.id]: false }));
+    }
   };
 
   const openMenu = async (t: Tenant) => {
@@ -321,27 +367,42 @@ export default function SuperAdminPage() {
   };
 
   const saveCat = async (vals: { name: string; sort_order: number; is_active?: boolean; image_url?: string }) => {
-    if (!menuDrawer.tenant) return;
-    const payload = {
-      ...vals,
-      image_url: vals.image_url?.trim() || null,
-    };
-    if (editingCat) {
-      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", _itemId: editingCat.id, ...payload }) });
-    } else {
-      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", ...payload }) });
+    if (!menuDrawer.tenant || catSaving || lockRef.current["saveCat"]) return;
+    lockRef.current["saveCat"] = true;
+    setCatSaving(true);
+    try {
+      const payload = {
+        ...vals,
+        image_url: vals.image_url?.trim() || null,
+      };
+      if (editingCat) {
+        await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", _itemId: editingCat.id, ...payload }) });
+      } else {
+        await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", ...payload }) });
+      }
+      catForm.resetFields(); setCatModalOpen(false); setEditingCat(null); refreshMenu();
+    } finally {
+      lockRef.current["saveCat"] = false;
+      setCatSaving(false);
     }
-    catForm.resetFields(); setCatModalOpen(false); setEditingCat(null); refreshMenu();
   };
 
   const deleteCat = async (id: string) => {
-    if (!menuDrawer.tenant) return;
-    await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", _itemId: id }) });
-    refreshMenu();
+    const key = `deleteCat:${id}`;
+    if (!menuDrawer.tenant || lockRef.current[key]) return;
+    lockRef.current[key] = true;
+    try {
+      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "category", _itemId: id }) });
+      refreshMenu();
+    } finally {
+      lockRef.current[key] = false;
+    }
   };
 
   const saveProd = async (vals: Record<string, unknown>) => {
-    if (!menuDrawer.tenant) return;
+    if (!menuDrawer.tenant || prodSaving || lockRef.current["saveProd"]) return;
+    lockRef.current["saveProd"] = true;
+    setProdSaving(true);
     const { image_url, labels: labelsRaw, discount_price, base_price, stock_count, ...rest } = vals;
     const payload = {
       ...rest,
@@ -371,13 +432,22 @@ export default function SuperAdminPage() {
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : "Terjadi kesalahan saat menyimpan produk";
       message.error(errMsg);
+    } finally {
+      lockRef.current["saveProd"] = false;
+      setProdSaving(false);
     }
   };
 
   const deleteProd = async (id: string) => {
-    if (!menuDrawer.tenant) return;
-    await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "product", _itemId: id }) });
-    refreshMenu();
+    const key = `deleteProd:${id}`;
+    if (!menuDrawer.tenant || lockRef.current[key]) return;
+    lockRef.current[key] = true;
+    try {
+      await fetch(`/api/admin/tenants/${menuDrawer.tenant.id}/menu`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ _type: "product", _itemId: id }) });
+      refreshMenu();
+    } finally {
+      lockRef.current[key] = false;
+    }
   };
 
   const handleLogout = async () => { await signOut(); router.push("/admin-login"); };
@@ -435,7 +505,7 @@ export default function SuperAdminPage() {
     {
       title: "Status",
       render: (_: unknown, t: Tenant) => (
-        <Switch checked={t.is_active} onChange={() => toggleActive(t)} checkedChildren="Aktif" unCheckedChildren="Off" />
+        <Switch checked={t.is_active} loading={!!togglingTenantMap[t.id]} onChange={() => toggleActive(t)} checkedChildren="Aktif" unCheckedChildren="Off" />
       ),
     },
     {
@@ -1217,6 +1287,7 @@ export default function SuperAdminPage() {
         open={catModalOpen}
         onCancel={() => { setCatModalOpen(false); setEditingCat(null); }}
         onOk={() => catForm.submit()} okText="Simpan"
+        confirmLoading={catSaving}
         okButtonProps={{ style: { background: "#09090b", borderColor: "#09090b" } }}
       >
         <Form form={catForm} onFinish={saveCat} layout="vertical">
@@ -1242,6 +1313,7 @@ export default function SuperAdminPage() {
         open={prodModalOpen}
         onCancel={() => { setProdModalOpen(false); setEditingProd(null); }}
         onOk={() => prodForm.submit()} okText="Simpan" width={580}
+        confirmLoading={prodSaving}
         okButtonProps={{ style: { background: "#09090b", borderColor: "#09090b" } }}
       >
         <Form form={prodForm} onFinish={saveProd} layout="vertical" requiredMark="optional">

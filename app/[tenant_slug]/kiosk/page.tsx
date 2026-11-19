@@ -4,11 +4,53 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { getTenantBySlug } from "@/services/tenantService";
 import { getCategoriesWithProducts, getProductsByTenant } from "@/services/productService";
-import { createOrder, generateQueueNumber, getActiveOrderByTable, buildCustomerNotes } from "@/services/orderService";
+import { createOrder, generateQueueNumber, getActiveOrderByTable, buildCustomerNotes, autoCancelStalePendingOrders } from "@/services/orderService";
 import { validateTableToken } from "@/services/tableService";
 import { getSupabaseClient } from "@/lib/supabase";
+import { generateIdempotencyKey } from "@/lib/idempotency";
 import type { Tenant, Category, Product, CartItem, OrderType, TableRecord } from "@/types";
 import { ProductCard } from "@/components/ProductCard";
+import { QuickNoteChips } from "@/components/QuickNoteChips";
+
+/** Tablet dianggap ditinggal bila tidak ada sentuhan selama 2 menit */
+const IDLE_TIMEOUT_MS = 120_000;
+/** Waktu jawab pada pop-up "Masih di sana?" sebelum sesi direset otomatis */
+const IDLE_PROMPT_SECONDS = 30;
+
+/** Harga jual efektif (harga promo bila valid, selain itu harga dasar) */
+function getEffectivePrice(p: Pick<Product, "base_price" | "discount_price">) {
+  const hasPromo =
+    p.discount_price !== null &&
+    p.discount_price !== undefined &&
+    p.discount_price > 0 &&
+    p.discount_price < p.base_price;
+  return hasPromo ? (p.discount_price as number) : p.base_price;
+}
+
+/**
+ * Selaraskan item keranjang dengan data produk terbaru (harga baru langsung berlaku).
+ * Mengembalikan array baru + flag apakah ada perubahan.
+ */
+function syncCartPrices(
+  cart: CartItem[],
+  latest: Map<string, Pick<Product, "id" | "base_price" | "discount_price"> & Partial<Product>>
+): { next: CartItem[]; changed: boolean } {
+  let changed = false;
+  const next = cart.map((item) => {
+    const fresh = latest.get(item.product.id);
+    if (!fresh) return item;
+    const variantExtra = item.selected_variants.reduce((s, v) => s + (v.additional_price || 0), 0);
+    const newUnit = getEffectivePrice(fresh) + variantExtra;
+    const priceChanged =
+      newUnit !== item.unit_price ||
+      fresh.base_price !== item.product.base_price ||
+      (fresh.discount_price ?? null) !== (item.product.discount_price ?? null);
+    if (!priceChanged) return item;
+    changed = true;
+    return { ...item, unit_price: newUnit, product: { ...item.product, ...fresh } as Product };
+  });
+  return { next, changed };
+}
 
 type KioskScreen =
   | "splash"
@@ -49,6 +91,15 @@ export default function KioskPage({
   const [tableInputError, setTableInputError] = useState<string | null>(null);
   const [isCheckingTable, setIsCheckingTable] = useState(false);
   const slugRef = useRef<string>("");
+  const checkoutLockRef = useRef(false);
+  const tableCheckLockRef = useRef(false);
+  const checkoutIdemKeyRef = useRef<string>("");
+  // Idle watcher (tablet ditinggal pelanggan)
+  const [idlePromptOpen, setIdlePromptOpen] = useState(false);
+  const [idleCountdown, setIdleCountdown] = useState(IDLE_PROMPT_SECONDS);
+  const lastActivityRef = useRef<number>(Date.now());
+  // Pesan netral di layar ringkasan bila total belanja diperbarui saat checkout
+  const [summaryNotice, setSummaryNotice] = useState<string | null>(null);
   // Ref untuk cleanup realtime channel produk saat unmount
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const productChannelRef = useRef<any>(null);
@@ -62,6 +113,9 @@ export default function KioskPage({
       const t = await getTenantBySlug(tenant_slug);
       if (!t) return;
       setTenant(t);
+
+      // Bersihkan otomatis pesanan pending > 30 menit yang belum lunas agar stok & meja kembali tersedia
+      await autoCancelStalePendingOrders(t.id).catch(console.error);
 
       const [cats, prods] = await Promise.all([
         getCategoriesWithProducts(t.id),
@@ -77,26 +131,53 @@ export default function KioskPage({
       }
 
       const saved = sessionStorage.getItem(`cart:${tenant_slug}`);
-      if (saved) setCart(JSON.parse(saved));
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved) as CartItem[];
+          const prodMap = new Map(prods.map((p) => [p.id, p]));
+          const { next } = syncCartPrices(parsed, prodMap);
+          setCart(next);
+          sessionStorage.setItem(`cart:${tenant_slug}`, JSON.stringify(next));
+        } catch {
+          setCart([]);
+        }
+      }
 
       setTimeout(() => setScreen("order_type"), 2200);
 
       // ── REALTIME: Subscribe products table — Kiosk auto-disables card saat stok habis ──
       // Info stok (angka) TIDAK ditampilkan di Kiosk, hanya status aktif/nonaktif.
+      // Harga baru (harga dasar / promo) juga langsung diterapkan ke kartu menu & keranjang aktif.
       const supabase = getSupabaseClient();
       const productChannel = supabase
         .channel(`kiosk-products-${t.id}`)
         .on(
           "postgres_changes",
           { event: "UPDATE", schema: "public", table: "products", filter: `tenant_id=eq.${t.id}` },
-          (payload: { new: { id: string; is_available: boolean; stock_count: number | null } }) => {
-            setProducts((prev) =>
-              prev.map((p) =>
-                p.id === payload.new.id
-                  ? { ...p, is_available: payload.new.is_available, stock_count: payload.new.stock_count }
-                  : p
-              )
-            );
+          (payload: { new: Partial<Product> & { id: string } }) => {
+            const fresh = payload.new;
+            const patch: Partial<Product> = {};
+            if (fresh.is_available !== undefined) patch.is_available = fresh.is_available;
+            if (fresh.stock_count !== undefined) patch.stock_count = fresh.stock_count;
+            if (fresh.base_price !== undefined) patch.base_price = Number(fresh.base_price);
+            if (fresh.discount_price !== undefined) patch.discount_price = fresh.discount_price === null ? null : Number(fresh.discount_price);
+            if (fresh.name !== undefined) patch.name = fresh.name;
+            if (fresh.image_urls !== undefined) patch.image_urls = fresh.image_urls;
+
+            setProducts((prev) => prev.map((p) => (p.id === fresh.id ? { ...p, ...patch } : p)));
+
+            if (patch.base_price !== undefined) {
+              setCart((prev) => {
+                const { next, changed } = syncCartPrices(
+                  prev,
+                  new Map([[fresh.id, { id: fresh.id, base_price: patch.base_price!, discount_price: patch.discount_price ?? null }]])
+                );
+                if (!changed) return prev;
+                checkoutIdemKeyRef.current = "";
+                sessionStorage.setItem(`cart:${slugRef.current}`, JSON.stringify(next));
+                return next;
+              });
+            }
           }
         )
         .subscribe();
@@ -111,6 +192,7 @@ export default function KioskPage({
 
   const saveCart = (items: CartItem[]) => {
     setCart(items);
+    checkoutIdemKeyRef.current = "";
     sessionStorage.setItem(`cart:${slugRef.current}`, JSON.stringify(items));
   };
 
@@ -188,32 +270,37 @@ export default function KioskPage({
   }, 0);
 
   const handleCheckout = async () => {
-    if (!tenant || isCheckingOut) return;
-
-    const isTableMode = tenant.business_logic.numbering === "table" && orderType !== "takeaway";
-    const targetTableNum = (tableRecord?.display_name ?? tableRecord?.table_number ?? tableInputValue).trim();
-
-    if (isTableMode) {
-      if (!targetTableNum) {
-        alert("Nomor Meja wajib diisi untuk pesanan Dine-In!");
-        setScreen("table_input");
-        return;
-      }
-      if (!tableRecord && !/^\d+$/.test(targetTableNum)) {
-        alert("Nomor Meja harus berupa angka! (Contoh: 05)");
-        setScreen("table_input");
-        return;
-      }
-      const activeExisting = await getActiveOrderByTable(tenant.id, targetTableNum);
-      if (activeExisting) {
-        alert(`⚠️ Meja "${targetTableNum}" sedang terisi oleh pesanan aktif yang belum selesai. Harap gunakan nomor meja lain!`);
-        setScreen("table_input");
-        return;
-      }
-    }
-
+    if (!tenant || isCheckingOut || checkoutLockRef.current) return;
+    checkoutLockRef.current = true;
     setIsCheckingOut(true);
+
     try {
+      const isTableMode = tenant.business_logic.numbering === "table" && orderType !== "takeaway";
+      const targetTableNum = (tableRecord?.display_name ?? tableRecord?.table_number ?? tableInputValue).trim();
+
+      if (isTableMode) {
+        if (!targetTableNum) {
+          alert("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+          setScreen("table_input");
+          return;
+        }
+        if (!tableRecord && !/^\d+$/.test(targetTableNum)) {
+          alert("Nomor Meja harus berupa angka! (Contoh: 05)");
+          setScreen("table_input");
+          return;
+        }
+        const activeExisting = await getActiveOrderByTable(tenant.id, targetTableNum);
+        if (activeExisting) {
+          alert(`⚠️ Meja "${targetTableNum}" sedang terisi oleh pesanan aktif yang belum selesai. Harap gunakan nomor meja lain!`);
+          setScreen("table_input");
+          return;
+        }
+      }
+
+      if (!checkoutIdemKeyRef.current) {
+        checkoutIdemKeyRef.current = generateIdempotencyKey("kiosk");
+      }
+
       const fc = tenant.finance_config;
       const tax = Math.round(subtotal * fc.tax_percentage / 100);
       const svc = Math.round(subtotal * fc.service_charge_percentage / 100);
@@ -252,10 +339,12 @@ export default function KioskPage({
           unit_price: c.unit_price,
           subtotal: c.unit_price * c.quantity,
           notes: c.notes || undefined,
-        }))
+        })),
+        checkoutIdemKeyRef.current
       );
 
       if (order) {
+        checkoutIdemKeyRef.current = "";
         setCreatedOrderId(order.id);
         sessionStorage.removeItem(`cart:${slugRef.current}`);
         saveCart([]);
@@ -266,6 +355,7 @@ export default function KioskPage({
       const errMsg = err instanceof Error ? err.message : "Terjadi kesalahan saat memproses pesanan.";
       setCheckoutError(errMsg);
     } finally {
+      checkoutLockRef.current = false;
       setIsCheckingOut(false);
     }
   };
@@ -273,10 +363,67 @@ export default function KioskPage({
   const resetSession = useCallback(() => {
     setScreen("order_type");
     setCart([]);
+    if (slugRef.current) {
+      sessionStorage.removeItem(`cart:${slugRef.current}`);
+    }
+    checkoutIdemKeyRef.current = "";
     setTableInputValue("");
     setCustomerName("");
     setTableRecord(null);
+    setActiveProduct(null);
+    setConfirmDeleteIndex(null);
+    setCheckoutError(null);
+    setIdlePromptOpen(false);
+    setSummaryNotice(null);
+    lastActivityRef.current = Date.now();
   }, []);
+
+  // ── IDLE WATCHER: Tanyakan konfirmasi jika tidak ada interaksi selama 2 menit ──
+  useEffect(() => {
+    const isIdleExempt = screen === "splash" || screen === "success" || (screen === "order_type" && cart.length === 0);
+    if (isIdleExempt) {
+      setIdlePromptOpen(false);
+      lastActivityRef.current = Date.now();
+      return;
+    }
+
+    const markActivity = () => {
+      if (!idlePromptOpen) {
+        lastActivityRef.current = Date.now();
+      }
+    };
+
+    const events = ["pointerdown", "touchstart", "keydown", "wheel", "scroll"] as const;
+    events.forEach((ev) => window.addEventListener(ev, markActivity, { passive: true }));
+
+    const checkInterval = setInterval(() => {
+      if (!idlePromptOpen && Date.now() - lastActivityRef.current >= IDLE_TIMEOUT_MS) {
+        setIdleCountdown(IDLE_PROMPT_SECONDS);
+        setIdlePromptOpen(true);
+      }
+    }, 1000);
+
+    return () => {
+      events.forEach((ev) => window.removeEventListener(ev, markActivity));
+      clearInterval(checkInterval);
+    };
+  }, [screen, cart.length, idlePromptOpen]);
+
+  // Countdown saat pop-up konfirmasi idle sedang terbuka
+  useEffect(() => {
+    if (!idlePromptOpen) return;
+    const timer = setInterval(() => {
+      setIdleCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          resetSession();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [idlePromptOpen, resetSession]);
 
   const filteredProducts = products.filter((p) =>
     selectedCategory ? p.category_id === selectedCategory : true
@@ -638,6 +785,16 @@ export default function KioskPage({
                       className="flex-1 text-sm p-2 bg-gray-50 border border-gray-100 rounded-xl outline-none focus:border-[var(--tenant-primary)] placeholder-gray-400"
                     />
                   </div>
+                  <div className="pt-1">
+                    <QuickNoteChips
+                      product={item.product}
+                      categoryName={categories.find((c) => c.id === item.product.category_id)?.name}
+                      value={item.notes || ""}
+                      onChange={(nextNotes) => updateCartItemNotes(i, nextNotes)}
+                      includePackaging={orderType === "takeaway"}
+                      size="sm"
+                    />
+                  </div>
                 </div>
               ))}
             </div>
@@ -781,6 +938,7 @@ export default function KioskPage({
                   type="button"
                   disabled={isCheckingTable}
                   onClick={async () => {
+                    if (isCheckingTable || tableCheckLockRef.current) return;
                     const isTableRequired = bl.numbering === "table" && orderType !== "takeaway";
                     const targetTableNum = (tableRecord?.display_name ?? tableRecord?.table_number ?? tableInputValue).trim();
                     const trimmedName = customerName.trim();
@@ -795,12 +953,17 @@ export default function KioskPage({
                         return;
                       }
                       if (tenant && !tableRecord) {
+                        tableCheckLockRef.current = true;
                         setIsCheckingTable(true);
-                        const activeExisting = await getActiveOrderByTable(tenant.id, targetTableNum);
-                        setIsCheckingTable(false);
-                        if (activeExisting) {
-                          setTableInputError(`Wah, Meja "${targetTableNum}" sedang terisi pesanan lain nih. Pilih nomor meja lain ya! 🪑`);
-                          return;
+                        try {
+                          const activeExisting = await getActiveOrderByTable(tenant.id, targetTableNum);
+                          if (activeExisting) {
+                            setTableInputError(`Wah, Meja "${targetTableNum}" sedang terisi pesanan lain nih. Pilih nomor meja lain ya! 🪑`);
+                            return;
+                          }
+                        } finally {
+                          tableCheckLockRef.current = false;
+                          setIsCheckingTable(false);
                         }
                       }
                     } else {
@@ -1261,8 +1424,19 @@ export default function KioskPage({
                           </div>
                         </div>
 
-                        <div>
-                          <h3 className="text-sm font-bold text-gray-800 mb-1.5">Catatan Tambahan</h3>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-sm font-bold text-gray-800">Catatan &amp; Preferensi Menu</h3>
+                            <span className="text-[11px] font-semibold text-gray-400">Klik opsi cepat atau ketik manual</span>
+                          </div>
+                          <QuickNoteChips
+                            product={activeProduct}
+                            categoryName={categories.find((c) => c.id === activeProduct.category_id)?.name}
+                            value={modalNotes}
+                            onChange={setModalNotes}
+                            includePackaging={orderType === "takeaway"}
+                            size="lg"
+                          />
                           <textarea
                             value={modalNotes}
                             onChange={(e) => setModalNotes(e.target.value)}
@@ -1381,6 +1555,59 @@ export default function KioskPage({
               >
                 Cek Keranjang
               </button>
+            </motion.div>
+          </div>
+        )}
+
+        {/* IDLE CONFIRMATION MODAL (Muncul setelah 2 menit tanpa interaksi) */}
+        {idlePromptOpen && (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+            <motion.div
+              className="absolute inset-0 bg-black/60 backdrop-blur-xs"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            />
+            <motion.div
+              className="bg-white rounded-3xl w-full max-w-md flex flex-col overflow-hidden z-[81] shadow-2xl p-6 text-center space-y-5"
+              initial={{ opacity: 0, scale: 0.92, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 20 }}
+            >
+              <div className="w-20 h-20 rounded-full bg-indigo-50 text-indigo-600 flex flex-col items-center justify-center mx-auto border-4 border-indigo-100">
+                <span className="text-2xl font-black leading-none">{idleCountdown}s</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 mt-0.5">Otomatis</span>
+              </div>
+
+              <div className="space-y-1.5">
+                <h3 className="text-xl font-black text-gray-900">
+                  Apakah Anda masih membutuhkan waktu?
+                </h3>
+                <p className="text-gray-500 text-xs sm:text-sm font-medium leading-relaxed">
+                  Layar tidak disentuh selama 2 menit. Pilih <strong className="text-gray-800">Ya, Lanjutkan</strong> untuk meneruskan pesanan Anda, atau sesi akan dikosongkan otomatis dalam <strong className="text-rose-600">{idleCountdown} detik</strong>.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={resetSession}
+                  className="flex-1 py-3.5 rounded-2xl font-extrabold text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 active:scale-95 transition-all cursor-pointer"
+                >
+                  Tidak, Mulai Ulang
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    lastActivityRef.current = Date.now();
+                    setIdlePromptOpen(false);
+                  }}
+                  className="flex-1 py-3.5 rounded-2xl font-extrabold text-sm text-white shadow-lg active:scale-95 transition-all cursor-pointer"
+                  style={{ background: "var(--tenant-primary)" }}
+                >
+                  Ya, Saya Masih Memesan
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

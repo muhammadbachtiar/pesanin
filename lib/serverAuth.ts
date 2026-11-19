@@ -82,3 +82,16 @@ export async function requireTenantAccess(tenantId: string): Promise<AuthGuardRe
     }
     return { profile, error: null };
 }
+
+/**
+ * Wajib login sebagai pengelola outlet: OWNER dari tenant tersebut, atau SUPER_ADMIN.
+ * Dipakai untuk CRUD menu/kategori & pengaturan keuangan outlet oleh Owner.
+ */
+export async function requireTenantManager(tenantId: string): Promise<AuthGuardResult> {
+    const result = await requireTenantAccess(tenantId);
+    if (result.error) return result;
+    if (result.profile.role !== "SUPER_ADMIN" && result.profile.role !== "OWNER") {
+        return { profile: null, error: new Response(JSON.stringify({ error: "Forbidden" }), { status: 403 }) };
+    }
+    return result;
+}

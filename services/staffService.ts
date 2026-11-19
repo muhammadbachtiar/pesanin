@@ -5,6 +5,7 @@
  * agar SUPABASE_SERVICE_ROLE_KEY tidak pernah bocor ke browser.
  */
 
+import { dedupeInFlight } from "@/lib/idempotency";
 import type { Profile, UserRole } from "@/types";
 
 export interface CreateStaffPayload {
@@ -26,14 +27,21 @@ export interface StaffListItem extends Profile {
 
 /** Buat akun staf baru (auth + profile) */
 export async function createStaffAccount(payload: CreateStaffPayload): Promise<{ success: boolean; profileId?: string; error?: string }> {
-  const res = await fetch("/api/admin/staff", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json();
-  if (!res.ok) return { success: false, error: data.error ?? "Gagal membuat akun" };
-  return { success: true, profileId: data.profileId };
+  const key = `createStaff:${payload.email.trim().toLowerCase()}:${payload.tenantId ?? ""}`;
+  return dedupeInFlight(
+    key,
+    async () => {
+      const res = await fetch("/api/admin/staff", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error ?? "Gagal membuat akun" };
+      return { success: true, profileId: data.profileId };
+    },
+    5_000
+  );
 }
 
 /** Ambil daftar staf per tenant */
@@ -54,32 +62,38 @@ export async function getAllStaff(): Promise<StaffListItem[]> {
 
 /** Toggle aktif/nonaktif akun staf */
 export async function toggleStaffActive(profileId: string, isActive: boolean): Promise<boolean> {
-  const res = await fetch("/api/admin/staff", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profileId, isActive }),
+  return dedupeInFlight(`toggleStaff:${profileId}:${isActive}`, async () => {
+    const res = await fetch("/api/admin/staff", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId, isActive }),
+    });
+    return res.ok;
   });
-  return res.ok;
 }
 
 /** Atur/ganti PIN Quick Login staf. Kirim null untuk menghapus PIN. */
 export async function setStaffPin(profileId: string, pin: string | null): Promise<{ success: boolean; error?: string }> {
-  const res = await fetch("/api/admin/staff", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profileId, pin }),
+  return dedupeInFlight(`setStaffPin:${profileId}:${pin ?? "null"}`, async () => {
+    const res = await fetch("/api/admin/staff", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId, pin }),
+    });
+    if (res.ok) return { success: true };
+    const data = await res.json().catch(() => ({}));
+    return { success: false, error: data.error ?? "Gagal menyimpan PIN" };
   });
-  if (res.ok) return { success: true };
-  const data = await res.json().catch(() => ({}));
-  return { success: false, error: data.error ?? "Gagal menyimpan PIN" };
 }
 
 /** Hapus akun staf permanen (profiles + auth.users) */
 export async function deleteStaffAccount(profileId: string): Promise<boolean> {
-  const res = await fetch(`/api/admin/staff?profileId=${encodeURIComponent(profileId)}`, {
-    method: "DELETE",
+  return dedupeInFlight(`deleteStaff:${profileId}`, async () => {
+    const res = await fetch(`/api/admin/staff?profileId=${encodeURIComponent(profileId)}`, {
+      method: "DELETE",
+    });
+    return res.ok;
   });
-  return res.ok;
 }
 
 /** Label display per role */

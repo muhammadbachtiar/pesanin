@@ -12,9 +12,11 @@ import { toggleProductAvailability } from "@/services/productService";
 import { useRealtimeOrders } from "@/hooks/useRealtime";
 import type { Order, Tenant, Profile, Product, CartItem, PaymentMethodType, Category } from "@/types";
 import { ProductCard } from "@/components/ProductCard";
+import { QuickNoteChips } from "@/components/QuickNoteChips";
 import { TenantRoleGuard } from "@/components/auth/TenantRoleGuard";
 import { useBluetoothPrinter } from "@/hooks/useBluetoothPrinter";
 import { supabase } from "@/lib/supabase";
+import { generateIdempotencyKey } from "@/lib/idempotency";
 
 const STATUS_COLOR: Record<string, string> = {
   pending: "orange", cooking: "blue", ready: "green",
@@ -124,6 +126,8 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   };
   const [voidForm] = Form.useForm();
   const [submitting, setSubmitting] = useState<Record<string, boolean>>({});
+  const submittingRef = useRef<Record<string, boolean>>({});
+  const posIdemKeyRef = useRef<string>("");
   const [undoQueueState, setUndoQueueState] = useState<Record<string, string>>({});
   const undoQueueRef = useRef<Record<string, { timer: ReturnType<typeof setTimeout>; previousNotes?: string }>>({});
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
@@ -249,9 +253,30 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           { event: "*", schema: "public", table: "products", filter: `tenant_id=eq.${t.id}` },
           (payload: { eventType: string; new: Record<string, unknown>; old: Record<string, unknown> }) => {
             if (payload.eventType === "UPDATE") {
+              const updatedProd = payload.new as unknown as Product;
               setProducts((prev) =>
-                prev.map((p) => (p.id === (payload.new as unknown as Product).id ? { ...p, ...(payload.new as unknown as Product) } : p))
+                prev.map((p) => (p.id === updatedProd.id ? { ...p, ...updatedProd } : p))
               );
+              // Sinkronkan harga baru secara otomatis ke keranjang POS Kasir yang sedang aktif
+              if (updatedProd.base_price !== undefined) {
+                const hasPromo =
+                  updatedProd.discount_price !== null &&
+                  updatedProd.discount_price !== undefined &&
+                  Number(updatedProd.discount_price) > 0 &&
+                  Number(updatedProd.discount_price) < Number(updatedProd.base_price);
+                const newUnitPrice = hasPromo ? Number(updatedProd.discount_price) : Number(updatedProd.base_price);
+                setCart((prev) =>
+                  prev.map((item) =>
+                    item.product.id === updatedProd.id
+                      ? {
+                          ...item,
+                          unit_price: newUnitPrice,
+                          product: { ...item.product, ...updatedProd },
+                        }
+                      : item
+                  )
+                );
+              }
             } else if (payload.eventType === "INSERT") {
               setProducts((prev) => [...prev, payload.new as unknown as Product]);
             } else if (payload.eventType === "DELETE") {
@@ -362,7 +387,15 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   );
 
   const handleVoid = async (values: { reason: string }) => {
-    if (!profile || submitting["void"]) return;
+    if (!profile || submitting["void"] || submittingRef.current["void"]) return;
+    const targetOrder = orders.find((o) => o.id === voidModal.orderId);
+    const isOwnerOrSuper = profile.role === "OWNER" || profile.role === "SUPER_ADMIN";
+    if (targetOrder?.payment_status === "paid" && !isOwnerOrSuper) {
+      message.error("Pesanan yang sudah LUNAS hanya dapat dibatalkan (Void) oleh Owner.");
+      setVoidModal({ open: false, orderId: "" });
+      return;
+    }
+    submittingRef.current["void"] = true;
     setSubmitting((s) => ({ ...s, void: true }));
     try {
       await voidOrder(voidModal.orderId, values.reason, profile.id);
@@ -370,12 +403,13 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       voidForm.resetFields();
       if (tenant) refreshOrders(tenant.id);
     } finally {
+      submittingRef.current["void"] = false;
       setSubmitting((s) => ({ ...s, void: false }));
     }
   };
 
   const handlePayConfirm = async () => {
-    if (!profile || !payModal.order || submitting["pay"]) return;
+    if (!profile || !payModal.order || submitting["pay"] || submittingRef.current["pay"]) return;
     const rawOrder = payModal.order;
     const fullOrder = orders.find((o) => o.id === rawOrder.id) || rawOrder;
 
@@ -387,6 +421,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       return;
     }
 
+    submittingRef.current["pay"] = true;
     setSubmitting((s) => ({ ...s, pay: true }));
     try {
       // pos_only mode or explicit autoComplete: mark completed immediately after payment
@@ -438,18 +473,22 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       console.error("handlePayConfirm error:", err);
       message.error("Terjadi kesalahan saat mengonfirmasi pembayaran.");
     } finally {
+      submittingRef.current["pay"] = false;
       setSubmitting((s) => ({ ...s, pay: false }));
     }
   };
 
   const handleServe = async (order: Order) => {
-    if (submitting[`serve_${order.id}`]) return;
-    setSubmitting((s) => ({ ...s, [`serve_${order.id}`]: true }));
+    const key = `serve_${order.id}`;
+    if (submitting[key] || submittingRef.current[key]) return;
+    submittingRef.current[key] = true;
+    setSubmitting((s) => ({ ...s, [key]: true }));
     try {
       await markOrderServed(order.id, order.customer_notes);
       if (tenant) refreshOrders(tenant.id);
     } finally {
-      setSubmitting((s) => ({ ...s, [`serve_${order.id}`]: false }));
+      submittingRef.current[key] = false;
+      setSubmitting((s) => ({ ...s, [key]: false }));
     }
   };
 
@@ -492,24 +531,30 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   };
 
   const handleApprove = async (orderId: string) => {
-    if (!profile || submitting[`approve_${orderId}`]) return;
-    setSubmitting((s) => ({ ...s, [`approve_${orderId}`]: true }));
+    const key = `approve_${orderId}`;
+    if (!profile || submitting[key] || submittingRef.current[key]) return;
+    submittingRef.current[key] = true;
+    setSubmitting((s) => ({ ...s, [key]: true }));
     try {
       await approveOrder(orderId, profile.id);
       if (tenant) refreshOrders(tenant.id);
     } finally {
-      setSubmitting((s) => ({ ...s, [`approve_${orderId}`]: false }));
+      submittingRef.current[key] = false;
+      setSubmitting((s) => ({ ...s, [key]: false }));
     }
   };
 
   const handleReadyToComplete = async (orderId: string) => {
-    if (submitting[`complete_${orderId}`]) return;
-    setSubmitting((s) => ({ ...s, [`complete_${orderId}`]: true }));
+    const key = `complete_${orderId}`;
+    if (submitting[key] || submittingRef.current[key]) return;
+    submittingRef.current[key] = true;
+    setSubmitting((s) => ({ ...s, [key]: true }));
     try {
       await updateOrderStatus(orderId, "completed");
       if (tenant) refreshOrders(tenant.id);
     } finally {
-      setSubmitting((s) => ({ ...s, [`complete_${orderId}`]: false }));
+      submittingRef.current[key] = false;
+      setSubmitting((s) => ({ ...s, [key]: false }));
     }
   };
 
@@ -524,6 +569,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   };
 
   const addToCart = (product: Product) => {
+    posIdemKeyRef.current = "";
     const effectivePrice = getProductEffectivePrice(product);
     setCart((prev) => {
       const idx = prev.findIndex((c) => c.product.id === product.id);
@@ -537,6 +583,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   };
 
   const updateProductQuantityInCart = (product: Product, newQty: number) => {
+    posIdemKeyRef.current = "";
     const effectivePrice = getProductEffectivePrice(product);
     setCart((prev) => {
       const idx = prev.findIndex((c) => c.product.id === product.id);
@@ -553,6 +600,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   };
 
   const setCartQty = (index: number, qty: number) => {
+    posIdemKeyRef.current = "";
     if (qty <= 0) {
       setCart((prev) => prev.filter((_, i) => i !== index));
       return;
@@ -605,48 +653,53 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
 
 
   const handleDirectPosPay = async () => {
-    if (!tenant || !profile || cart.length === 0 || submitting["createOrder"]) return;
-
-    const isTableMode = tenant.business_logic?.numbering === "table" && orderType !== "takeaway";
-    const cleanTableNum = tableNumber.trim();
-
-    if (isTableMode) {
-      if (!cleanTableNum) {
-        message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
-        tableInputRef.current?.focus();
-        return;
-      }
-
-      if (!/^\d+$/.test(cleanTableNum)) {
-        message.warning("Nomor Meja harus berupa angka! (Contoh: 05)");
-        tableInputRef.current?.focus();
-        return;
-      }
-
-      const activeExisting =
-        orders.find(
-          (o) =>
-            ["pending", "cooking", "ready"].includes(o.order_status) &&
-            o.table_number?.trim().toLowerCase() === cleanTableNum.toLowerCase()
-        ) || (await getActiveOrderByTable(tenant.id, cleanTableNum));
-
-      if (activeExisting) {
-        message.error(
-          `Meja "${cleanTableNum}" sedang terisi oleh Pesanan #${activeExisting.queue_number} (${activeExisting.order_status.toUpperCase()}) yang belum selesai!`
-        );
-        tableInputRef.current?.focus();
-        return;
-      }
-    }
-
-    const actualCash = posCashReceived !== null ? posCashReceived : cartTotal;
-    if (posPayMethod === "cash" && actualCash < cartTotal) {
-      message.error("Nominal uang tunai yang diterima kurang dari total belanja!");
-      return;
-    }
-
+    if (!tenant || !profile || cart.length === 0 || submitting["createOrder"] || submittingRef.current["createOrder"]) return;
+    submittingRef.current["createOrder"] = true;
     setSubmitting((s) => ({ ...s, createOrder: true }));
+
     try {
+      const isTableMode = tenant.business_logic?.numbering === "table" && orderType !== "takeaway";
+      const cleanTableNum = tableNumber.trim();
+
+      if (isTableMode) {
+        if (!cleanTableNum) {
+          message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+          tableInputRef.current?.focus();
+          return;
+        }
+
+        if (!/^\d+$/.test(cleanTableNum)) {
+          message.warning("Nomor Meja harus berupa angka! (Contoh: 05)");
+          tableInputRef.current?.focus();
+          return;
+        }
+
+        const activeExisting =
+          orders.find(
+            (o) =>
+              ["pending", "cooking", "ready"].includes(o.order_status) &&
+              o.table_number?.trim().toLowerCase() === cleanTableNum.toLowerCase()
+          ) || (await getActiveOrderByTable(tenant.id, cleanTableNum));
+
+        if (activeExisting) {
+          message.error(
+            `Meja "${cleanTableNum}" sedang terisi oleh Pesanan #${activeExisting.queue_number} (${activeExisting.order_status.toUpperCase()}) yang belum selesai!`
+          );
+          tableInputRef.current?.focus();
+          return;
+        }
+      }
+
+      const actualCash = posCashReceived !== null ? posCashReceived : cartTotal;
+      if (posPayMethod === "cash" && actualCash < cartTotal) {
+        message.error("Nominal uang tunai yang diterima kurang dari total belanja!");
+        return;
+      }
+
+      if (!posIdemKeyRef.current) {
+        posIdemKeyRef.current = generateIdempotencyKey("pos-pay");
+      }
+
       const qn = await generateQueueNumber(tenant.id);
       const targetStatus: Order["order_status"] = isPosOnly ? "completed" : "cooking";
 
@@ -681,12 +734,15 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           unit_price: c.unit_price,
           subtotal: c.unit_price * c.quantity,
           notes: c.notes || undefined,
-        }))
+        })),
+        posIdemKeyRef.current
       );
 
       if (!created) {
         throw new Error("Gagal membuat pesanan di database.");
       }
+
+      posIdemKeyRef.current = "";
 
       // Tandai Lunas langsung di database (Single-step checkout)
       await markOrderPaid(created.id, posPayMethod, profile.id, targetStatus);
@@ -742,50 +798,56 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       const errMsg = err instanceof Error ? err.message : "Gagal memproses transaksi kasir";
       message.error(errMsg);
     } finally {
+      submittingRef.current["createOrder"] = false;
       setSubmitting((s) => ({ ...s, createOrder: false }));
     }
   };
 
   const handleSavePendingOrder = async () => {
-    if (!tenant || !profile || cart.length === 0 || submitting["createOrder"]) return;
-
-    const isTableMode = tenant.business_logic?.numbering === "table" && orderType !== "takeaway";
-    const cleanTableNum = tableNumber.trim();
-
-    if (isTableMode) {
-      if (!cleanTableNum) {
-        message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
-        tableInputRef.current?.focus();
-        return;
-      }
-
-      if (!/^\d+$/.test(cleanTableNum)) {
-        message.warning("Nomor Meja harus berupa angka! (Contoh: 05)");
-        tableInputRef.current?.focus();
-        return;
-      }
-
-      const activeExisting =
-        orders.find(
-          (o) =>
-            ["pending", "cooking", "ready"].includes(o.order_status) &&
-            o.table_number?.trim().toLowerCase() === cleanTableNum.toLowerCase()
-        ) || (await getActiveOrderByTable(tenant.id, cleanTableNum));
-
-      if (activeExisting) {
-        message.error(
-          `Meja "${cleanTableNum}" sedang terisi oleh Pesanan #${activeExisting.queue_number} (${activeExisting.order_status.toUpperCase()}) yang belum selesai!`
-        );
-        tableInputRef.current?.focus();
-        return;
-      }
-    }
-
+    if (!tenant || !profile || cart.length === 0 || submitting["createOrder"] || submittingRef.current["createOrder"]) return;
+    submittingRef.current["createOrder"] = true;
     setSubmitting((s) => ({ ...s, createOrder: true }));
+
     try {
+      const isTableMode = tenant.business_logic?.numbering === "table" && orderType !== "takeaway";
+      const cleanTableNum = tableNumber.trim();
+
+      if (isTableMode) {
+        if (!cleanTableNum) {
+          message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+          tableInputRef.current?.focus();
+          return;
+        }
+
+        if (!/^\d+$/.test(cleanTableNum)) {
+          message.warning("Nomor Meja harus berupa angka! (Contoh: 05)");
+          tableInputRef.current?.focus();
+          return;
+        }
+
+        const activeExisting =
+          orders.find(
+            (o) =>
+              ["pending", "cooking", "ready"].includes(o.order_status) &&
+              o.table_number?.trim().toLowerCase() === cleanTableNum.toLowerCase()
+          ) || (await getActiveOrderByTable(tenant.id, cleanTableNum));
+
+        if (activeExisting) {
+          message.error(
+            `Meja "${cleanTableNum}" sedang terisi oleh Pesanan #${activeExisting.queue_number} (${activeExisting.order_status.toUpperCase()}) yang belum selesai!`
+          );
+          tableInputRef.current?.focus();
+          return;
+        }
+      }
+
+      if (!posIdemKeyRef.current) {
+        posIdemKeyRef.current = generateIdempotencyKey("pos-pending");
+      }
+
       const qn = await generateQueueNumber(tenant.id);
       const notesWithCustomerName = buildCustomerNotes(customerNotes, false, [], customerName.trim());
-      const created = await createOrder(
+      await createOrder(
         {
           tenant_id: tenant.id,
           queue_number: qn,
@@ -815,9 +877,11 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
           unit_price: c.unit_price,
           subtotal: c.unit_price * c.quantity,
           notes: c.notes || undefined,
-        }))
+        })),
+        posIdemKeyRef.current
       );
 
+      posIdemKeyRef.current = "";
       message.success(`Pesanan #${qn} berhasil disimpan di daftar antrian (Menunggu)`);
       setCart([]);
       setTableNumber("");
@@ -832,6 +896,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
       const errMsg = err instanceof Error ? err.message : "Gagal menyimpan pesanan";
       message.error(errMsg);
     } finally {
+      submittingRef.current["createOrder"] = false;
       setSubmitting((s) => ({ ...s, createOrder: false }));
     }
   };
@@ -845,43 +910,48 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
   };
 
   const handleProceedToPayment = async () => {
-    if (cart.length === 0) return;
+    if (cart.length === 0 || submittingRef.current["checkTable"]) return;
+    submittingRef.current["checkTable"] = true;
 
-    const isTableMode = tenant?.business_logic?.numbering === "table" && orderType !== "takeaway";
-    const cleanTableNum = tableNumber.trim();
+    try {
+      const isTableMode = tenant?.business_logic?.numbering === "table" && orderType !== "takeaway";
+      const cleanTableNum = tableNumber.trim();
 
-    if (isTableMode) {
-      if (!cleanTableNum) {
-        message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
-        tableInputRef.current?.focus();
-        return;
+      if (isTableMode) {
+        if (!cleanTableNum) {
+          message.warning("Nomor Meja wajib diisi untuk pesanan Dine-In!");
+          tableInputRef.current?.focus();
+          return;
+        }
+
+        if (!/^\d+$/.test(cleanTableNum)) {
+          message.warning("Nomor Meja harus berupa angka! (Contoh: 05)");
+          tableInputRef.current?.focus();
+          return;
+        }
+
+        // Validasi apakah meja sedang terisi pesanan aktif yang belum selesai
+        const activeExisting =
+          orders.find(
+            (o) =>
+              ["pending", "cooking", "ready"].includes(o.order_status) &&
+              o.table_number?.trim().toLowerCase() === cleanTableNum.toLowerCase()
+          ) || (tenant ? await getActiveOrderByTable(tenant.id, cleanTableNum) : null);
+
+        if (activeExisting) {
+          message.error(
+            `Meja "${cleanTableNum}" sedang terisi oleh Pesanan #${activeExisting.queue_number} (${activeExisting.order_status.toUpperCase()}) yang belum selesai!`
+          );
+          tableInputRef.current?.focus();
+          return;
+        }
       }
 
-      if (!/^\d+$/.test(cleanTableNum)) {
-        message.warning("Nomor Meja harus berupa angka! (Contoh: 05)");
-        tableInputRef.current?.focus();
-        return;
-      }
-
-      // Validasi apakah meja sedang terisi pesanan aktif yang belum selesai
-      const activeExisting =
-        orders.find(
-          (o) =>
-            ["pending", "cooking", "ready"].includes(o.order_status) &&
-            o.table_number?.trim().toLowerCase() === cleanTableNum.toLowerCase()
-        ) || (tenant ? await getActiveOrderByTable(tenant.id, cleanTableNum) : null);
-
-      if (activeExisting) {
-        message.error(
-          `Meja "${cleanTableNum}" sedang terisi oleh Pesanan #${activeExisting.queue_number} (${activeExisting.order_status.toUpperCase()}) yang belum selesai!`
-        );
-        tableInputRef.current?.focus();
-        return;
-      }
+      setRightPanelTab("payment");
+      if (posCashReceived === null) setPosCashReceived(cartTotal);
+    } finally {
+      submittingRef.current["checkTable"] = false;
     }
-
-    setRightPanelTab("payment");
-    if (posCashReceived === null) setPosCashReceived(cartTotal);
   };
 
   const toggleItemCompleteCashier = useCallback(
@@ -1217,7 +1287,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                     >
                       Cetak
                     </Button>
-                    {r.order_status !== "cancelled" && (
+                    {r.order_status !== "cancelled" && (profile?.role === "OWNER" || profile?.role === "SUPER_ADMIN") && (
                       <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
                         Void
                       </Button>
@@ -1362,12 +1432,14 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                   </>
                 )}
 
-                {/* VOID BUTTON */}
-                {r.order_status !== "cancelled" && !isOrderEffectivelyCompleted(r) && (
-                  <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
-                    Void
-                  </Button>
-                )}
+                {/* VOID BUTTON: Kasir hanya boleh void pesanan belum lunas; Owner boleh void pesanan lunas */}
+                {r.order_status !== "cancelled" &&
+                  (isUnpaid || profile?.role === "OWNER" || profile?.role === "SUPER_ADMIN") &&
+                  (!isOrderEffectivelyCompleted(r) || profile?.role === "OWNER" || profile?.role === "SUPER_ADMIN") && (
+                    <Button danger size="small" onClick={() => setVoidModal({ open: true, orderId: r.id })}>
+                      Void
+                    </Button>
+                  )}
 
                 {/* REPRINT RECEIPT BUTTON */}
                 {(r.payment_status === "paid" || isOrderEffectivelyCompleted(r)) && (
@@ -1562,12 +1634,14 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
             )}
           </button>
 
-          <a
-            href="analytics"
-            className="flex items-center gap-1.5 text-white/80 hover:text-white text-sm font-medium border border-white/30 px-3 py-2 rounded-xl hover:bg-white/10 transition-all"
-          >
-            📊 <span className="hidden sm:inline">Analitik</span>
-          </a>
+          {(profile?.role === "OWNER" || profile?.role === "SUPER_ADMIN") && (
+            <a
+              href="analytics"
+              className="flex items-center gap-1.5 text-white/80 hover:text-white text-sm font-medium border border-white/30 px-3 py-2 rounded-xl hover:bg-white/10 transition-all"
+            >
+              📊 <span className="hidden sm:inline">Analitik</span>
+            </a>
+          )}
           <button
             onClick={() => setNewOrderDrawer(true)}
             className="flex items-center gap-2 font-bold text-sm px-4 py-2 rounded-xl shadow hover:shadow-md active:scale-95 transition-all text-white"
@@ -2821,13 +2895,21 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                           </div>
                         </div>
 
-                        {/* Item Notes Input */}
-                        <div>
+                        {/* Item Notes Input & Quick Note Chips */}
+                        <div className="space-y-1.5">
                           <input
                             value={item.notes || ""}
                             onChange={(e) => setCartNotes(i, e.target.value)}
                             placeholder="Catatan menu (contoh: pedas, es sedikit)..."
                             className="w-full text-[11px] px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:bg-white focus:border-indigo-500 transition-colors placeholder-gray-400 font-medium"
+                          />
+                          <QuickNoteChips
+                            product={item.product}
+                            categoryName={categories.find((c) => c.id === item.product.category_id)?.name}
+                            value={item.notes || ""}
+                            onChange={(nextNotes) => setCartNotes(i, nextNotes)}
+                            includePackaging={orderType === "takeaway"}
+                            size="sm"
                           />
                         </div>
                       </div>

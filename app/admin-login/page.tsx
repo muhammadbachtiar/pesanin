@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
@@ -22,6 +22,7 @@ export default function AdminLoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const submittingRef = useRef(false);
 
   // Sudah login sebagai Super Admin → langsung ke dashboard
   useEffect(() => {
@@ -38,6 +39,8 @@ export default function AdminLoginPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading || submittingRef.current) return;
+    submittingRef.current = true;
     setLoading(true);
     setError("");
     try {
@@ -57,6 +60,7 @@ export default function AdminLoginPage() {
       console.error(err);
       setError("Terjadi kesalahan sistem. Silakan coba lagi.");
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   };

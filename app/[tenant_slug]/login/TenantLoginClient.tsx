@@ -57,6 +57,7 @@ export default function TenantLoginClient({ tenant, staff }: { tenant: LoginTena
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [shakeKey, setShakeKey] = useState(0);
+  const submittingRef = useRef(false);
 
   // Email form
   const [email, setEmail] = useState("");
@@ -81,7 +82,8 @@ export default function TenantLoginClient({ tenant, staff }: { tenant: LoginTena
 
   const submitPin = useCallback(
     async (value: string) => {
-      if (!selected || loading || value.length < 4) return;
+      if (!selected || loading || submittingRef.current || value.length < 4) return;
+      submittingRef.current = true;
       setLoading(true);
       setError("");
       try {
@@ -95,12 +97,14 @@ export default function TenantLoginClient({ tenant, staff }: { tenant: LoginTena
           setError(data.error ?? "PIN salah.");
           setPin("");
           setShakeKey((k) => k + 1);
+          submittingRef.current = false;
           setLoading(false);
           return;
         }
         router.replace(next ?? data.redirect);
       } catch {
         setError("Tidak dapat terhubung ke server. Coba lagi.");
+        submittingRef.current = false;
         setLoading(false);
       }
     },
@@ -152,6 +156,8 @@ export default function TenantLoginClient({ tenant, staff }: { tenant: LoginTena
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading || submittingRef.current) return;
+    submittingRef.current = true;
     setLoading(true);
     setError("");
     try {
@@ -181,6 +187,7 @@ export default function TenantLoginClient({ tenant, staff }: { tenant: LoginTena
       console.error(err);
       setError("Terjadi kesalahan sistem. Silakan coba lagi.");
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   };
