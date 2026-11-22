@@ -1,6 +1,22 @@
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { dedupeInFlight } from "@/lib/idempotency";
 import type { Category, Product, ProductVariantGroup } from "@/types";
+
+let _serverAdminClient: SupabaseClient | null = null;
+function getWriteDb(): SupabaseClient {
+    if (typeof window === "undefined" && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        if (!_serverAdminClient) {
+            _serverAdminClient = createClient(
+                process.env.NEXT_PUBLIC_SUPABASE_URL,
+                process.env.SUPABASE_SERVICE_ROLE_KEY,
+                { auth: { autoRefreshToken: false, persistSession: false } }
+            );
+        }
+        return _serverAdminClient;
+    }
+    return supabase as unknown as SupabaseClient;
+}
 
 export async function getCategoriesWithProducts(tenantId: string): Promise<Category[]> {
     const { data, error } = await supabase
@@ -44,7 +60,7 @@ export async function toggleProductAvailability(
     return dedupeInFlight(key, async () => {
         const payload: Record<string, unknown> = { is_available: isAvailable };
         if (stockCount !== undefined) payload.stock_count = stockCount;
-        const { error } = await supabase.from("products").update(payload).eq("id", productId);
+        const { error } = await getWriteDb().from("products").update(payload).eq("id", productId);
         return !error;
     });
 }
@@ -55,7 +71,7 @@ export async function updateProduct(
 ): Promise<{ success: boolean; error?: string }> {
     const key = `updateProduct:${productId}:${JSON.stringify(updates)}`;
     return dedupeInFlight(key, async () => {
-        const { error } = await supabase.from("products").update(updates).eq("id", productId);
+        const { error } = await getWriteDb().from("products").update(updates).eq("id", productId);
         if (error) {
             console.error("updateProduct error:", error);
             return { success: false, error: error.message };

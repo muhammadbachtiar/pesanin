@@ -187,9 +187,22 @@ export function generateReceiptEscPos(
     builder.twoCol("No. Meja", order.table_number);
   }
 
-  // Nama pelanggan jika ada
-  if (order.customer_name) {
-    builder.twoCol("Pelanggan", order.customer_name);
+  // Nama pelanggan & catatan pesanan (mendukung kolom customer_name maupun tag [NAME:...] di customer_notes)
+  const rawNotes = order.customer_notes || "";
+  const nameMatch = rawNotes.match(/\[NAME:([^\]]*)\]/);
+  const resolvedCustomerName =
+    order.customer_name?.trim() || (nameMatch && nameMatch[1] ? nameMatch[1].trim() : "");
+  const cleanOrderNotes = rawNotes
+    .replace(/\[SERVED\]/g, "")
+    .replace(/\[COOKED:[^\]]*\]/g, "")
+    .replace(/\[NAME:[^\]]*\]/g, "")
+    .trim();
+
+  if (resolvedCustomerName) {
+    builder.twoCol("Pelanggan", resolvedCustomerName);
+  }
+  if (cleanOrderNotes) {
+    builder.line(`Catatan: ${cleanOrderNotes}`);
   }
 
   builder.dottedDivider();

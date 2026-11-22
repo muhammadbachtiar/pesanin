@@ -12,11 +12,13 @@ let _client: ReturnType<typeof createBrowserClient> | null = null;
  * Wajib dipakai agar middleware server bisa membaca session.
  */
 export function getSupabaseClient() {
+  const currentUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || url;
+  const currentAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || anonKey;
   if (typeof window === "undefined") {
     // Di server context, buat fresh instance (tidak di-cache)
-    return createBrowserClient(url, anonKey);
+    return createBrowserClient(currentUrl, currentAnonKey);
   }
-  if (!_client) _client = createBrowserClient(url, anonKey);
+  if (!_client) _client = createBrowserClient(currentUrl, currentAnonKey);
   return _client;
 }
 
