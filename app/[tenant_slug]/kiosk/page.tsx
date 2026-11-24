@@ -10,7 +10,7 @@ import { getSupabaseClient } from "@/lib/supabase";
 import { generateIdempotencyKey } from "@/lib/idempotency";
 import type { Tenant, Category, Product, CartItem, OrderType, TableRecord } from "@/types";
 import { ProductCard } from "@/components/ProductCard";
-import { QuickNoteChips } from "@/components/QuickNoteChips";
+import { QuickNoteInput } from "@/components/QuickNoteChips";
 
 /** Tablet dianggap ditinggal bila tidak ada sentuhan selama 2 menit */
 const IDLE_TIMEOUT_MS = 120_000;
@@ -777,23 +777,18 @@ export default function KioskPage({
                       />
                       <button onClick={() => updateCartItemQuantity(i, item.quantity + 1)} className="w-9 h-9 rounded-full text-white flex items-center justify-center font-bold text-lg" style={{ background: "var(--tenant-secondary, var(--tenant-primary))" }}>+</button>
                     </div>
-                    <input
-                      value={item.notes || ""}
-                      onChange={(e) => updateCartItemNotes(i, e.target.value)}
-                      onFocus={(e) => setTimeout(() => e.target.scrollIntoView({ behavior: "smooth", block: "center" }), 200)}
-                      placeholder="Tulis Opsional (Minta Pedas, dsb...)"
-                      className="flex-1 text-sm p-2 bg-gray-50 border border-gray-100 rounded-xl outline-none focus:border-[var(--tenant-primary)] placeholder-gray-400"
-                    />
-                  </div>
-                  <div className="pt-1">
-                    <QuickNoteChips
-                      product={item.product}
-                      categoryName={categories.find((c) => c.id === item.product.category_id)?.name}
-                      value={item.notes || ""}
-                      onChange={(nextNotes) => updateCartItemNotes(i, nextNotes)}
-                      includePackaging={orderType === "takeaway"}
-                      size="sm"
-                    />
+                    <div className="flex-1 min-w-0">
+                      <QuickNoteInput
+                        product={item.product}
+                        categoryName={categories.find((c) => c.id === item.product.category_id)?.name}
+                        value={item.notes || ""}
+                        onChange={(nextNotes) => updateCartItemNotes(i, nextNotes)}
+                        includePackaging={orderType === "takeaway"}
+                        placeholder="Catatan menu (klik untuk opsi cepat)..."
+                        size="lg"
+                        onFocusScroll
+                      />
+                    </div>
                   </div>
                 </div>
               ))}
@@ -861,7 +856,7 @@ export default function KioskPage({
                       </label>
                       {tableRecord && (
                         <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-300">
-                          ✨ QR Meja {tableRecord.table_number}
+                           QR Meja {tableRecord.table_number}
                         </span>
                       )}
                     </div>
@@ -1424,26 +1419,21 @@ export default function KioskPage({
                           </div>
                         </div>
 
-                        <div className="space-y-2">
+                        <div className="space-y-1.5">
                           <div className="flex items-center justify-between">
                             <h3 className="text-sm font-bold text-gray-800">Catatan &amp; Preferensi Menu</h3>
-                            <span className="text-[11px] font-semibold text-gray-400">Klik opsi cepat atau ketik manual</span>
+                            <span className="text-[11px] font-semibold text-gray-400">Klik kolom untuk pilih opsi cepat</span>
                           </div>
-                          <QuickNoteChips
+                          <QuickNoteInput
                             product={activeProduct}
                             categoryName={categories.find((c) => c.id === activeProduct.category_id)?.name}
                             value={modalNotes}
                             onChange={setModalNotes}
                             includePackaging={orderType === "takeaway"}
+                            placeholder="Klik di sini untuk memilih opsi cepat atau ketik catatan..."
                             size="lg"
-                          />
-                          <textarea
-                            value={modalNotes}
-                            onChange={(e) => setModalNotes(e.target.value)}
-                            onFocus={(e) => setTimeout(() => e.target.scrollIntoView({ behavior: "smooth", block: "center" }), 200)}
-                            placeholder="Contoh: Jangan terlalu pedas, tambah es, dll."
-                            className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:bg-white focus:border-[var(--tenant-primary)] text-sm"
-                            rows={2}
+                            multiline
+                            onFocusScroll
                           />
                         </div>
                       </div>
@@ -1454,7 +1444,7 @@ export default function KioskPage({
                         className="px-5 py-3 landscape:py-2 rounded-xl font-bold border-2 text-gray-600 border-gray-200 cursor-pointer active:bg-gray-100 transition-colors text-sm"
                         onClick={() => setActiveProduct(null)}
                       >
-                        Tutup
+                      Tutup
                       </button>
                       <button
                         className="flex-1 py-3 landscape:py-2 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-base landscape:text-sm active:scale-95 transition-transform cursor-pointer shadow-md"

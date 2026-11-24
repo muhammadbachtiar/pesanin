@@ -3,6 +3,8 @@
  * Sinkron dengan: supabase/migrations/20261108220000_storage_tenant_assets.sql
  */
 
+import { getSupabaseUrl } from "@/lib/env";
+
 export const ASSET_BUCKET = "tenant-assets";
 
 /** Folder yang diizinkan di dalam `{tenantId}/` */
@@ -30,7 +32,7 @@ export function getAssetPathFromUrl(url: string | null | undefined): string | nu
   if (!url) return null;
   try {
     const parsed = new URL(url);
-    const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const base = getSupabaseUrl();
     if (base && parsed.origin !== new URL(base).origin) return null;
     const idx = parsed.pathname.indexOf(PUBLIC_PREFIX);
     if (idx === -1) return null;

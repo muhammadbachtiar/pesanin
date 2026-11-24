@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "db:patch": "tsx scripts/patch-db.ts"
+    "typecheck": "tsc --noEmit",
+    "db:patch": "tsx scripts/patch-db.ts",
+    "test:mvp": "tsx scripts/verify-mvp.ts",
+    "test:flows": "tsx scripts/verify-tenant-role-flows.ts",
+    "test:all": "tsx scripts/verify-mvp.ts && tsx scripts/verify-tenant-role-flows.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",

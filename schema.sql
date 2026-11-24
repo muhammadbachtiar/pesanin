@@ -330,6 +330,7 @@ CREATE TABLE orders (
     gateway_status              TEXT,
 
     -- Audit & Tracking
+    customer_name               TEXT,
     customer_notes              TEXT,
 
     -- Verifikasi kasir
@@ -519,44 +520,53 @@ RETURNS BOOLEAN AS $$
 $$ LANGUAGE SQL SECURITY DEFINER STABLE;
 
 -- TENANTS
-CREATE POLICY "sa_all_tenants"          ON tenants FOR ALL TO authenticated USING (is_super_admin());
-CREATE POLICY "staff_own_tenant"        ON tenants FOR SELECT TO authenticated USING (id = auth_tenant_id());
+CREATE POLICY "sa_all_tenants"           ON tenants FOR ALL TO authenticated USING (is_super_admin());
+CREATE POLICY "staff_own_tenant"         ON tenants FOR SELECT TO authenticated USING (id = auth_tenant_id());
+CREATE POLICY "anon_read_active_tenants" ON tenants FOR SELECT TO anon USING (is_active = TRUE);
 
 -- PROFILES
-CREATE POLICY "sa_all_profiles"         ON profiles FOR ALL TO authenticated USING (is_super_admin());
-CREATE POLICY "owner_manage_profiles"   ON profiles FOR ALL TO authenticated
-    USING (auth_user_role() = 'OWNER' AND tenant_id = auth_tenant_id());
-CREATE POLICY "self_read_profile"       ON profiles FOR SELECT TO authenticated USING (user_id = auth.uid());
+CREATE POLICY "sa_all_profiles"          ON profiles FOR ALL TO authenticated USING (is_super_admin());
+CREATE POLICY "owner_manage_staff_profiles" ON profiles FOR ALL TO authenticated
+    USING (auth_user_role() = 'OWNER' AND tenant_id = auth_tenant_id() AND role IN ('CASHIER', 'KITCHEN', 'RUNNER'))
+    WITH CHECK (auth_user_role() = 'OWNER' AND tenant_id = auth_tenant_id() AND role IN ('CASHIER', 'KITCHEN', 'RUNNER'));
+CREATE POLICY "self_read_profile"        ON profiles FOR SELECT TO authenticated USING (user_id = auth.uid());
 
 -- TABLES
-CREATE POLICY "staff_own_tables"        ON tables FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
-CREATE POLICY "anon_read_tables"        ON tables FOR SELECT TO anon USING (TRUE);
+CREATE POLICY "sa_all_tables"            ON tables FOR ALL TO authenticated USING (is_super_admin());
+CREATE POLICY "staff_own_tables"         ON tables FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
+CREATE POLICY "anon_read_tables"         ON tables FOR SELECT TO anon USING (TRUE);
 
 -- CATEGORIES
-CREATE POLICY "staff_own_categories"    ON categories FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
-CREATE POLICY "anon_read_categories"    ON categories FOR SELECT TO anon USING (is_active = TRUE);
+CREATE POLICY "sa_all_categories"        ON categories FOR ALL TO authenticated USING (is_super_admin());
+CREATE POLICY "staff_own_categories"     ON categories FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
+CREATE POLICY "anon_read_categories"     ON categories FOR SELECT TO anon USING (is_active = TRUE);
 
 -- PRODUCTS
-CREATE POLICY "staff_own_products"      ON products FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
-CREATE POLICY "anon_read_products"      ON products FOR SELECT TO anon USING (is_available = TRUE);
+CREATE POLICY "sa_all_products"          ON products FOR ALL TO authenticated USING (is_super_admin());
+CREATE POLICY "staff_own_products"       ON products FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
+CREATE POLICY "anon_read_products"       ON products FOR SELECT TO anon USING (is_available = TRUE);
 
 -- PRODUCT VARIANT GROUPS
-CREATE POLICY "staff_own_pvg"           ON product_variant_groups FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
-CREATE POLICY "anon_read_pvg"           ON product_variant_groups FOR SELECT TO anon USING (TRUE);
+CREATE POLICY "sa_all_pvg"               ON product_variant_groups FOR ALL TO authenticated USING (is_super_admin());
+CREATE POLICY "staff_own_pvg"            ON product_variant_groups FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
+CREATE POLICY "anon_read_pvg"            ON product_variant_groups FOR SELECT TO anon USING (TRUE);
 
 -- PRODUCT VARIANT OPTIONS
-CREATE POLICY "staff_own_pvo"           ON product_variant_options FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
-CREATE POLICY "anon_read_pvo"           ON product_variant_options FOR SELECT TO anon USING (is_available = TRUE);
+CREATE POLICY "sa_all_pvo"               ON product_variant_options FOR ALL TO authenticated USING (is_super_admin());
+CREATE POLICY "staff_own_pvo"            ON product_variant_options FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
+CREATE POLICY "anon_read_pvo"            ON product_variant_options FOR SELECT TO anon USING (is_available = TRUE);
 
 -- ORDERS
-CREATE POLICY "anon_insert_orders"      ON orders FOR INSERT TO anon WITH CHECK (TRUE);
-CREATE POLICY "anon_read_orders"        ON orders FOR SELECT TO anon USING (TRUE);
-CREATE POLICY "staff_own_orders"        ON orders FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
+CREATE POLICY "sa_all_orders"            ON orders FOR ALL TO authenticated USING (is_super_admin());
+CREATE POLICY "anon_insert_orders"       ON orders FOR INSERT TO anon WITH CHECK (TRUE);
+CREATE POLICY "anon_read_orders"         ON orders FOR SELECT TO anon USING (TRUE);
+CREATE POLICY "staff_own_orders"         ON orders FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
 
 -- ORDER ITEMS
-CREATE POLICY "anon_insert_items"       ON order_items FOR INSERT TO anon WITH CHECK (TRUE);
-CREATE POLICY "anon_read_items"         ON order_items FOR SELECT TO anon USING (TRUE);
-CREATE POLICY "staff_own_items"         ON order_items FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
+CREATE POLICY "sa_all_order_items"       ON order_items FOR ALL TO authenticated USING (is_super_admin());
+CREATE POLICY "anon_insert_items"        ON order_items FOR INSERT TO anon WITH CHECK (TRUE);
+CREATE POLICY "anon_read_items"          ON order_items FOR SELECT TO anon USING (TRUE);
+CREATE POLICY "staff_own_items"          ON order_items FOR ALL TO authenticated USING (tenant_id = auth_tenant_id());
 
 -- ============================================================
 -- 14. REALTIME PUBLICATION

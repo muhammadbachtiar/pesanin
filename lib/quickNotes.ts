@@ -10,7 +10,7 @@
 export interface QuickNoteGroup {
   /** ID unik grup (dipakai untuk eksklusivitas pilihan) */
   id: string;
-  /** Label grup yang tampil kecil di atas chip */
+  /** Label grup yang tampil kecil di tab / chip */
   label: string;
   /** Jika true, hanya satu opsi dalam grup yang boleh aktif (mis. level gula) */
   exclusive: boolean;
@@ -37,26 +37,172 @@ type MenuKind =
   | "general";
 
 const KEYWORDS: Record<Exclude<MenuKind, "general">, string[]> = {
-  coffee: ["kopi", "coffee", "espresso", "latte", "cappuccino", "capucino", "americano", "macchiato", "mocha", "mochaccino", "affogato", "v60", "vietnam drip", "kopsu", "piccolo", "flat white", "cold brew"],
-  tea: ["teh", "tea", "matcha", "thai tea", "lychee tea", "lemon tea", "green tea", "chamomile", "oolong", "earl grey"],
-  milk: ["susu", "milk", "chocolate", "coklat", "cokelat", "taro", "red velvet", "milkshake", "frappe", "boba", "smoothie", "yakult"],
-  juice: ["jus", "juice", "es jeruk", "jeruk", "lemon", "mojito", "soda", "squash", "lemonade", "es buah", "kelapa", "alpukat"],
-  spicy_food: ["ayam geprek", "geprek", "sambal", "pedas", "seblak", "balado", "rica", "mercon", "penyet", "lalapan", "pecel"],
-  rice_noodle: ["nasi", "rice", "mie", "mi ", "bakmi", "noodle", "kwetiau", "bihun", "ramen", "pasta", "spaghetti", "fettuccine", "carbonara", "bolognese", "rice bowl", "katsu", "teriyaki", "ayam", "chicken", "beef", "sapi", "steak", "burger"],
-  fried_snack: ["kentang", "fries", "french fries", "cireng", "tahu", "tempe", "pisang goreng", "dimsum", "siomay", "nugget", "sosis", "risol", "mendoan", "onion ring", "chicken wings", "wings", "goreng", "snack", "camilan"],
-  bread_pastry: ["roti", "toast", "croissant", "bread", "sandwich", "pastry", "danish", "bagel", "waffle", "pancake", "donat", "donut"],
-  dessert: ["cake", "kue", "brownies", "pudding", "puding", "es krim", "ice cream", "gelato", "tiramisu", "cheesecake", "dessert", "manis", "sweet", "panna cotta", "klepon"],
-  soup: ["soto", "sop", "sup", "soup", "bakso", "rawon", "tongseng", "gulai", "tom yum", "ramen"],
+  coffee: [
+    "kopi",
+    "coffee",
+    "espresso",
+    "latte",
+    "cappuccino",
+    "capucino",
+    "americano",
+    "macchiato",
+    "mocha",
+    "mochaccino",
+    "affogato",
+    "v60",
+    "vietnam drip",
+    "kopsu",
+    "piccolo",
+    "flat white",
+    "cold brew",
+  ],
+  tea: [
+    "teh",
+    "tea",
+    "matcha",
+    "thai tea",
+    "lychee tea",
+    "lemon tea",
+    "green tea",
+    "chamomile",
+    "oolong",
+    "earl grey",
+  ],
+  milk: [
+    "susu",
+    "milk",
+    "chocolate",
+    "coklat",
+    "cokelat",
+    "taro",
+    "red velvet",
+    "milkshake",
+    "frappe",
+    "boba",
+    "smoothie",
+    "yakult",
+  ],
+  juice: [
+    "jus",
+    "juice",
+    "es jeruk",
+    "jeruk",
+    "lemon",
+    "mojito",
+    "soda",
+    "squash",
+    "lemonade",
+    "es buah",
+    "kelapa",
+    "alpukat",
+  ],
+  spicy_food: [
+    "ayam geprek",
+    "geprek",
+    "sambal",
+    "pedas",
+    "seblak",
+    "balado",
+    "rica",
+    "mercon",
+    "penyet",
+    "lalapan",
+    "pecel",
+  ],
+  rice_noodle: [
+    "nasi",
+    "rice",
+    "mie",
+    "mi",
+    "bakmi",
+    "noodle",
+    "kwetiau",
+    "bihun",
+    "ramen",
+    "pasta",
+    "spaghetti",
+    "fettuccine",
+    "carbonara",
+    "bolognese",
+    "rice bowl",
+    "katsu",
+    "teriyaki",
+    "ayam",
+    "chicken",
+    "beef",
+    "sapi",
+    "steak",
+    "sirloin",
+    "tenderloin",
+    "wagyu",
+    "burger",
+  ],
+  fried_snack: [
+    "kentang",
+    "fries",
+    "french fries",
+    "cireng",
+    "tahu",
+    "tempe",
+    "pisang goreng",
+    "dimsum",
+    "siomay",
+    "nugget",
+    "sosis",
+    "risol",
+    "mendoan",
+    "onion ring",
+    "chicken wings",
+    "wings",
+    "snack",
+    "camilan",
+  ],
+  bread_pastry: [
+    "roti",
+    "toast",
+    "croissant",
+    "bread",
+    "sandwich",
+    "pastry",
+    "danish",
+    "bagel",
+    "waffle",
+    "pancake",
+    "donat",
+    "donut",
+  ],
+  dessert: [
+    "cake",
+    "kue",
+    "brownies",
+    "pudding",
+    "puding",
+    "es krim",
+    "ice cream",
+    "gelato",
+    "tiramisu",
+    "cheesecake",
+    "dessert",
+    "panna cotta",
+    "klepon",
+  ],
+  soup: ["soto", "sop", "sup", "soup", "bakso", "rawon", "tongseng", "gulai", "tom yum"],
 };
 
-/** Kategori yang dianggap minuman (untuk fallback berdasarkan nama kategori) */
 const DRINK_CATEGORY_HINTS = ["minum", "drink", "beverage", "kopi", "coffee", "tea", "teh", "jus", "juice", "non coffee", "non-coffee"];
 const FOOD_CATEGORY_HINTS = ["makan", "food", "main course", "nasi", "mie", "rice", "berat", "lauk"];
 const SNACK_CATEGORY_HINTS = ["snack", "camilan", "cemilan", "appetizer", "side", "gorengan", "light meal"];
 const DESSERT_CATEGORY_HINTS = ["dessert", "kue", "cake", "pastry", "manis", "sweet", "roti", "bakery"];
 
+/** Cek kecocokan kata utuh (word boundary) agar "steak" tidak cocok dengan "tea" */
+function matchesKeyword(haystack: string, keyword: string): boolean {
+  const escaped = keyword.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i");
+  return regex.test(haystack);
+}
+
 function includesAny(haystack: string, needles: string[]) {
-  return needles.some((n) => haystack.includes(n));
+  return needles.some((n) => matchesKeyword(haystack, n));
 }
 
 function detectKinds(product: ProductLike, categoryName?: string | null): MenuKind[] {
@@ -68,7 +214,6 @@ function detectKinds(product: ProductLike, categoryName?: string | null): MenuKi
     if (includesAny(text, KEYWORDS[kind])) kinds.add(kind);
   });
 
-  // Fallback berdasarkan nama kategori jika nama menu tidak terdeteksi
   if (kinds.size === 0 && cat) {
     if (includesAny(cat, ["kopi", "coffee"])) kinds.add("coffee");
     else if (includesAny(cat, ["teh", "tea"])) kinds.add("tea");
@@ -79,8 +224,6 @@ function detectKinds(product: ProductLike, categoryName?: string | null): MenuKi
     else if (includesAny(cat, FOOD_CATEGORY_HINTS)) kinds.add("rice_noodle");
   }
 
-  // Jika menu minuman terdeteksi, abaikan deteksi makanan yang tidak relevan
-  // (mis. "Es Kopi Susu Gula Aren" mengandung "susu" → tetap kopi)
   const isDrink = kinds.has("coffee") || kinds.has("tea") || kinds.has("juice") || kinds.has("milk");
   if (isDrink) {
     kinds.delete("rice_noodle");
@@ -90,6 +233,11 @@ function detectKinds(product: ProductLike, categoryName?: string | null): MenuKi
     if (kinds.has("coffee")) kinds.delete("milk");
   }
 
+  // Jika makanan berat (rice_noodle), jangan gabungkan dengan fried_snack kecuali memang snack
+  if (kinds.has("rice_noodle") && kinds.has("fried_snack") && !includesAny(cat, SNACK_CATEGORY_HINTS)) {
+    kinds.delete("fried_snack");
+  }
+
   if (kinds.size === 0) kinds.add("general");
   return Array.from(kinds);
 }
@@ -97,22 +245,22 @@ function detectKinds(product: ProductLike, categoryName?: string | null): MenuKi
 const GROUPS: Record<string, QuickNoteGroup> = {
   sugar: { id: "sugar", label: "Gula", exclusive: true, options: ["Normal Sugar", "Less Sugar", "No Sugar", "Extra Sweet"] },
   ice: { id: "ice", label: "Es", exclusive: true, options: ["Normal Ice", "Less Ice", "No Ice", "Extra Ice"] },
-  temp: { id: "temp", label: "Suhu", exclusive: true, options: ["Hot", "Iced", "Warm"] },
-  coffee_extra: { id: "coffee_extra", label: "Kopi", exclusive: false, options: ["Extra Shot", "Strong / Kental", "Oat Milk", "Less Milk"] },
-  tea_extra: { id: "tea_extra", label: "Teh", exclusive: false, options: ["Tawar", "Teh Kental", "Tambah Lemon"] },
-  milk_extra: { id: "milk_extra", label: "Tambahan", exclusive: false, options: ["Extra Boba", "Extra Cream", "Tanpa Whipped Cream", "Extra Topping"] },
-  juice_extra: { id: "juice_extra", label: "Tambahan", exclusive: false, options: ["Tanpa Susu", "Tanpa Biji/Ampas", "Extra Kental"] },
-  spicy: { id: "spicy", label: "Level Pedas", exclusive: true, options: ["Tidak Pedas", "Sedang", "Pedas", "Extra Pedas"] },
-  food_custom: { id: "food_custom", label: "Request", exclusive: false, options: ["Tanpa Bawang", "Tanpa Sayur", "Tanpa Micin", "Sambal Dipisah", "Nasi Sedikit", "Extra Nasi"] },
-  doneness: { id: "doneness", label: "Kematangan", exclusive: true, options: ["Matang Sempurna", "Medium Well", "Medium"] },
+  temp: { id: "temp", label: "Suhu", exclusive: true, options: ["Iced", "Hot", "Warm"] },
+  coffee_extra: { id: "coffee_extra", label: "Ekstra", exclusive: false, options: ["Extra Shot", "Strong", "Less Milk", "Oat Milk"] },
+  tea_extra: { id: "tea_extra", label: "Ekstra", exclusive: false, options: ["Tawar", "Teh Kental", "Tambah Lemon"] },
+  milk_extra: { id: "milk_extra", label: "Topping", exclusive: false, options: ["Extra Boba", "Extra Cream", "Tanpa Cream", "Extra Topping"] },
+  juice_extra: { id: "juice_extra", label: "Request", exclusive: false, options: ["Tanpa Susu", "Tanpa Ampas", "Extra Kental"] },
+  spicy: { id: "spicy", label: "Pedas", exclusive: true, options: ["Tidak Pedas", "Sedang", "Pedas", "Extra Pedas"] },
+  food_custom: { id: "food_custom", label: "Request", exclusive: false, options: ["Tanpa Bawang", "Tanpa Sayur", "Sambal Pisah", "Nasi Sedikit"] },
+  doneness: { id: "doneness", label: "Kematangan", exclusive: true, options: ["Well Done", "Medium Well", "Medium"] },
   egg: { id: "egg", label: "Telur", exclusive: true, options: ["Telur Matang", "Telur Setengah Matang", "Tanpa Telur"] },
-  snack_sauce: { id: "snack_sauce", label: "Saus", exclusive: false, options: ["Saus Sambal", "Saus Tomat", "Mayonaise", "Saus Dipisah", "Tanpa Saus"] },
-  snack_custom: { id: "snack_custom", label: "Request", exclusive: false, options: ["Extra Crispy", "Tanpa Garam", "Bumbu Balado", "Bumbu Keju"] },
-  bread_custom: { id: "bread_custom", label: "Request", exclusive: false, options: ["Dihangatkan", "Dipotong Dua", "Extra Selai", "Tanpa Mentega"] },
-  dessert_custom: { id: "dessert_custom", label: "Request", exclusive: false, options: ["Tidak Terlalu Manis", "Extra Topping", "Tanpa Kacang", "Tulis Ucapan"] },
-  soup_custom: { id: "soup_custom", label: "Request", exclusive: false, options: ["Kuah Dipisah", "Extra Kuah", "Tanpa Seledri", "Tanpa Bawang Goreng", "Sambal Dipisah"] },
-  packaging: { id: "packaging", label: "Penyajian", exclusive: false, options: ["Bungkus Terpisah", "Tambah Sendok Garpu", "Tanpa Sedotan"] },
-  general: { id: "general", label: "Request", exclusive: false, options: ["Porsi Sedikit", "Porsi Lebih", "Tanpa Bawang", "Dipisah"] },
+  snack_sauce: { id: "snack_sauce", label: "Saus", exclusive: false, options: ["Saus Sambal", "Saus Tomat", "Mayonaise", "Saus Dipisah"] },
+  snack_custom: { id: "snack_custom", label: "Bumbu", exclusive: false, options: ["Extra Crispy", "Tanpa Garam", "Bumbu Balado", "Bumbu Keju"] },
+  bread_custom: { id: "bread_custom", label: "Penyajian", exclusive: false, options: ["Dihangatkan", "Dipotong Dua", "Extra Selai", "Tanpa Mentega"] },
+  dessert_custom: { id: "dessert_custom", label: "Request", exclusive: false, options: ["Less Sweet", "Extra Topping", "Tanpa Kacang"] },
+  soup_custom: { id: "soup_custom", label: "Kuah", exclusive: false, options: ["Kuah Dipisah", "Extra Kuah", "Tanpa Seledri", "Tanpa Bawang"] },
+  packaging: { id: "packaging", label: "Kemasan", exclusive: false, options: ["Bungkus Terpisah", "Tambah Sendok", "Tanpa Sedotan"] },
+  general: { id: "general", label: "Request", exclusive: false, options: ["Porsi Sedikit", "Tanpa Bawang", "Dipisah"] },
 };
 
 const KIND_GROUPS: Record<MenuKind, string[]> = {
@@ -140,13 +288,17 @@ export function getQuickNoteGroups(
 ): QuickNoteGroup[] {
   const kinds = detectKinds(product, categoryName);
   const ids: string[] = [];
-  kinds.forEach((k) => KIND_GROUPS[k].forEach((g) => { if (!ids.includes(g)) ids.push(g); }));
+  kinds.forEach((k) =>
+    KIND_GROUPS[k].forEach((g) => {
+      if (!ids.includes(g)) ids.push(g);
+    })
+  );
 
   const text = `${product.name} ${product.description ?? ""}`.toLowerCase();
 
-  // Menu steak / daging panggang → tambahkan tingkat kematangan
-  if (includesAny(text, ["steak", "sirloin", "tenderloin", "wagyu", "rib eye", "ribeye"]) && !ids.includes("doneness")) {
-    ids.push("doneness");
+  // Menu steak / daging panggang → utamakan tingkat kematangan
+  if (includesAny(text, ["steak", "sirloin", "tenderloin", "wagyu", "rib eye", "ribeye"])) {
+    if (!ids.includes("doneness")) ids.unshift("doneness");
   }
   // Grup telur hanya relevan untuk menu yang memang memakai telur
   if (ids.includes("egg") && !includesAny(text, ["telur", "egg", "nasi goreng", "mie goreng", "indomie", "omelet", "omelette", "ceplok", "dadar"])) {
@@ -161,7 +313,7 @@ export function getQuickNoteGroups(
     ids.splice(ids.indexOf("ice"), 1);
   }
 
-  if (includePackaging) ids.push("packaging");
+  if (includePackaging && !ids.includes("packaging")) ids.push("packaging");
 
   return ids.map((id) => GROUPS[id]).filter(Boolean);
 }

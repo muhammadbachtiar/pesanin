@@ -1,14 +1,21 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { getSupabaseUrl, getSupabaseAnonKey } from "@/lib/env";
 
 export async function middleware(request: NextRequest) {
     const response = NextResponse.next({ request });
 
+    const supabaseUrl = getSupabaseUrl();
+    const supabaseAnonKey = getSupabaseAnonKey();
+    if (!supabaseUrl || !supabaseAnonKey) {
+        return response;
+    }
+
     // Buat server client untuk refresh session cookie
     const sb = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        supabaseUrl,
+        supabaseAnonKey,
         {
             cookies: {
                 getAll() { return request.cookies.getAll(); },

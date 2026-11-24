@@ -320,11 +320,11 @@ async function runAllTests() {
       "Tahap 1",
       "Proteksi Redirect Lintas Tenant & Pembatasan PIN Hanya untuk Staf Operasional",
       cashierHome === "/kopi-kita/cashier" &&
-        ownerHome === "/kopi-kita/admin" &&
-        blockCrossTenantRedirect &&
-        blockExternalRedirect &&
-        allowSameTenantRedirect &&
-        ownerCannotUsePin,
+      ownerHome === "/kopi-kita/admin" &&
+      blockCrossTenantRedirect &&
+      blockExternalRedirect &&
+      allowSameTenantRedirect &&
+      ownerCannotUsePin,
       `Redirect lintas tenant & URL eksternal diblokir; OWNER wajib login Email (tidak boleh PIN Cepat)`
     );
 
@@ -666,9 +666,9 @@ async function runAllTests() {
       "Tahap 6",
       "Serialisasi Checklist Dapur (KDS) & Preservasi Metadata Nama Pelanggan di customer_notes",
       parsedNotes.cookedItemIds.includes(itemId1) &&
-        parsedNotes.cookedItemIds.includes(itemId2) &&
-        parsedNotes.customerName === "Budi Santoso" &&
-        parsedNotes.cleanNotes.includes("No Sugar, Extra Shot"),
+      parsedNotes.cookedItemIds.includes(itemId2) &&
+      parsedNotes.customerName === "Budi Santoso" &&
+      parsedNotes.cleanNotes.includes("No Sugar, Extra Shot"),
       `Item matang tersimpan (${parsedNotes.cookedItemIds.length} item), Nama="${parsedNotes.customerName}", Catatan="${parsedNotes.cleanNotes}"`
     );
 
@@ -738,8 +738,8 @@ async function runAllTests() {
       "Tahap 6",
       "Mode POS-Only (Single-Step Lunas & Completed) + Perhitungan Biaya Takeaway",
       posOrderCheck?.order_status === "completed" &&
-        posOrderCheck?.payment_status === "paid" &&
-        posOrderCheck?.takeaway_fee_amount === 1000,
+      posOrderCheck?.payment_status === "paid" &&
+      posOrderCheck?.takeaway_fee_amount === 1000,
       `Transaksi POS-Only langsung berstatus ${posOrderCheck?.payment_status} + ${posOrderCheck?.order_status} dengan Takeaway Fee Rp ${posOrderCheck?.takeaway_fee_amount}`
     );
 
@@ -843,12 +843,12 @@ async function runAllTests() {
       "Tahap 3 & 5",
       "Auto-Cancel Pesanan Kiosk Belum Lunas > 30 Menit (Bebaskan Meja & Kembalikan Stok Tanpa Mengganggu Pesanan Baru)",
       cancelledCount === 1 &&
-        staleCheck?.order_status === "cancelled" &&
-        freshCheck?.order_status === "pending" &&
-        prodAAfterAutoCancel?.stock_count === 1 &&
-        prodAAfterAutoCancel?.is_available === true &&
-        table12AfterAutoCancel === null &&
-        table14StillActive?.id === freshPendingOrder?.id,
+      staleCheck?.order_status === "cancelled" &&
+      freshCheck?.order_status === "pending" &&
+      prodAAfterAutoCancel?.stock_count === 1 &&
+      prodAAfterAutoCancel?.is_available === true &&
+      table12AfterAutoCancel === null &&
+      table14StillActive?.id === freshPendingOrder?.id,
       `Pesanan 35m otomatis cancelled (Stok kembali 0 -> ${prodAAfterAutoCancel?.stock_count}, Meja 12 bebas); Pesanan baru di Meja 14 tetap pending`
     );
 
@@ -947,7 +947,7 @@ async function runAllTests() {
       await sb.from("categories").delete().in("tenant_id", createdTenantIds);
       await sb.from("tenants").delete().in("id", createdTenantIds);
     }
-    console.log("✨ Data uji sementara berhasil dibersihkan.\n");
+    console.log(" Data uji sementara berhasil dibersihkan.\n");
   }
 
   // Ringkasan Akhir

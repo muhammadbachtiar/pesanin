@@ -12,7 +12,7 @@ import { toggleProductAvailability } from "@/services/productService";
 import { useRealtimeOrders } from "@/hooks/useRealtime";
 import type { Order, Tenant, Profile, Product, CartItem, PaymentMethodType, Category } from "@/types";
 import { ProductCard } from "@/components/ProductCard";
-import { QuickNoteChips } from "@/components/QuickNoteChips";
+import { QuickNoteInput } from "@/components/QuickNoteChips";
 import { TenantRoleGuard } from "@/components/auth/TenantRoleGuard";
 import { useBluetoothPrinter } from "@/hooks/useBluetoothPrinter";
 import { supabase } from "@/lib/supabase";
@@ -2104,7 +2104,7 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                             }`}
                         >
                           {val === total
-                            ? `✨ Uang Pas (${val.toLocaleString("id-ID")})`
+                            ? `Uang Pas (${val.toLocaleString("id-ID")})`
                             : `Rp ${val.toLocaleString("id-ID")}`}
                         </button>
                       ))}
@@ -2895,20 +2895,15 @@ export default function CashierPage({ params }: { params: Promise<{ tenant_slug:
                           </div>
                         </div>
 
-                        {/* Item Notes Input & Quick Note Chips */}
-                        <div className="space-y-1.5">
-                          <input
-                            value={item.notes || ""}
-                            onChange={(e) => setCartNotes(i, e.target.value)}
-                            placeholder="Catatan menu (contoh: pedas, es sedikit)..."
-                            className="w-full text-[11px] px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:bg-white focus:border-indigo-500 transition-colors placeholder-gray-400 font-medium"
-                          />
-                          <QuickNoteChips
+                        {/* Item Notes Input & Interactive On-Focus Quick Note Chips */}
+                        <div>
+                          <QuickNoteInput
                             product={item.product}
                             categoryName={categories.find((c) => c.id === item.product.category_id)?.name}
                             value={item.notes || ""}
                             onChange={(nextNotes) => setCartNotes(i, nextNotes)}
                             includePackaging={orderType === "takeaway"}
+                            placeholder="Catatan menu (klik untuk opsi cepat)..."
                             size="sm"
                           />
                         </div>

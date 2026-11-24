@@ -23,7 +23,7 @@ const LABEL_CONFIG: Record<string, { emoji: string; text: string; bg: string; co
   vegetarian:    { emoji: "🥦", text: "Vegetarian", bg: "#dcfce7", color: "#15803d" },
   vegan:         { emoji: "🌱", text: "Vegan",       bg: "#d1fae5", color: "#065f46" },
   best_seller:   { emoji: "🔥", text: "Terlaris",   bg: "#fef3c7", color: "#b45309" },
-  new:           { emoji: "✨", text: "Baru",         bg: "#ede9fe", color: "#6d28d9" },
+  new:           { emoji: "", text: "Baru",         bg: "#ede9fe", color: "#6d28d9" },
   halal:         { emoji: "☪️", text: "Halal",        bg: "#d1fae5", color: "#047857" },
   contains_nuts: { emoji: "🥜", text: "Kacang",     bg: "#fef3c7", color: "#92400e" },
   gluten_free:   { emoji: "🌾", text: "Non-Gluten", bg: "#e0f2fe", color: "#0369a1" },
